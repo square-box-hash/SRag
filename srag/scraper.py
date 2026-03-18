@@ -5,6 +5,7 @@ import random
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
+import trafilatura
 
 
 REALISTIC_HEADERS = [
@@ -30,10 +31,20 @@ REALISTIC_HEADERS = [
 
 
 class AnuInfrastructureScraper:
-    def __init__(self, max_results: int = 3, timeout: float = 5.0, max_chars: int = 2000):
+    def __init__(
+        self,
+        max_results: int = 3,
+        timeout: float = 5.0,
+        max_chars: int = 2000,
+        extract_mode: str = "basic",  # "basic" or "trafilatura"
+    ):
         self.max_results = max_results
         self.timeout = timeout
         self.max_chars = max_chars
+        self.extract_mode = extract_mode
+
+        if extract_mode not in ["basic", "trafilatura"]:
+            raise ValueError("extract_mode must be 'basic' or 'trafilatura'")
 
     async def get_facts(self, query: str):
         # 1. Search with DuckDuckGo
@@ -89,15 +100,24 @@ class AnuInfrastructureScraper:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = resp.text
 
-        # Remove obvious noise
-        for element in soup(["nav", "footer", "script", "style"]):
-            element.decompose()
+        # 1) Main content extraction
+        if self.extract_mode == "trafilatura":
+            # Trafilatura expects a downloaded HTML string
+            clean_text = trafilatura.extract(html) or ""
+            # We still need a soup object for metadata extraction
+            soup = BeautifulSoup(html, "html.parser")
+        else:
+            # Fallback: basic BeautifulSoup cleaning
+            soup = BeautifulSoup(html, "html.parser")
+            for element in soup(["nav", "footer", "script", "style"]):
+                element.decompose()
+            clean_text = soup.get_text(separator=" ", strip=True)
 
-        clean_text = soup.get_text(separator=" ", strip=True)
         clean_text = clean_text[: self.max_chars]
 
+        # 2) Metadata extraction
         page_title = self._extract_title(soup) or title
         page_date = self._extract_date(soup)
         page_author = self._extract_author(soup)

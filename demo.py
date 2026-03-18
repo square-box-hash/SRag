@@ -2,7 +2,7 @@ import asyncio
 from srag import AnuInfrastructureScraper
 
 async def main():
-    scraper = AnuInfrastructureScraper(max_results=3, max_chars=1500)
+    scraper = AnuInfrastructureScraper(max_results=3, max_chars=1500, extract_mode="trafilatura")
     results = await scraper.search("postgresql jsonb tutorial")
 
     for i, r in enumerate(results, start=1):
