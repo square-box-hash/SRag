@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 @dataclass
 class IndexedChunk:
     id: str
@@ -19,6 +20,7 @@ class IndexedChunk:
     content: str
     timestamp: str
     author: Optional[str]
+
 
 class SRagIndexer:
     def __init__(
@@ -49,7 +51,12 @@ class SRagIndexer:
     def _embed(self, texts: List[str]):
         return self.model.encode(texts, convert_to_numpy=True)
 
-    def index_documents(self, docs: List[dict], table_name: str = "web_chunks", force_new: bool = False):
+    def index_documents(
+        self,
+        docs: List[dict],
+        table_name: str = "web_chunks",
+        force_new: bool = False,
+    ):
         if not docs:
             return
 
@@ -59,7 +66,9 @@ class SRagIndexer:
 
         for i, d in enumerate(docs):
             source_url = d.get("url") or d.get("source") or "unknown_url"
-            row_id = hashlib.md5(f"{source_url}_{timestamp_prefix}_{i}".encode()).hexdigest()[:12]
+            row_id = hashlib.md5(
+                f"{source_url}_{timestamp_prefix}_{i}".encode()
+            ).hexdigest()[:12]
 
             rows.append({
                 "id": row_id,
@@ -72,12 +81,18 @@ class SRagIndexer:
 
         embeddings = self._embed([r["content"] for r in rows])
         for r, emb in zip(rows, embeddings):
-            r["embedding"] = emb.tolist()  # ensure JSON-serializable
+            r["embedding"] = emb.tolist()
 
         table.add(rows)
         print(f"📦 [{table_name}] Indexed {len(rows)} chunks.")
 
-    def semantic_search(self, query: str, table_name: str = "web_chunks", k: int = 5) -> List[dict]:
+    def semantic_search(
+        self,
+        query: str,
+        table_name: str = "web_chunks",
+        k: int = 5,
+    ) -> List[dict]:
+        """Vector search with URL dedup so you don't get multiple chunks per page."""
         if table_name not in self.db.table_names():
             print(f"⚠️  Table '{table_name}' not found.")
             return []
@@ -85,16 +100,30 @@ class SRagIndexer:
         table = self.db.open_table(table_name)
         q_vec = self._embed([query])[0]
 
-        return (
+        results = (
             table.search(q_vec, vector_column_name="embedding")
             .metric("cosine")
-            .limit(k)
+            .limit(k * 2)  # fetch extra, then dedup
             .to_list()
         )
 
-    def query_session(self, query: str, session_id: str, k: int = 5) -> List[dict]:
-        """Semantic search scoped to a specific research session."""
-        return self.semantic_search(query, table_name=session_id, k=k)
+        seen_urls = set()
+        deduped: List[dict] = []
+        for r in results:
+            url = r.get("url", "")
+            if url not in seen_urls:
+                seen_urls.add(url)
+                deduped.append(r)
+            if len(deduped) >= k:
+                break
+
+        return deduped
+
+    def query_session(self, query: str, session: str, k: int = 5) -> List[dict]:
+        """
+        Semantic search restricted to a given session table.
+        """
+        return self.semantic_search(query=query, table_name=session, k=k)
 
     def list_sessions(self) -> List[str]:
         """Returns all indexed session names."""
