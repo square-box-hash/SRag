@@ -111,22 +111,32 @@ class SRagOrchestrator:
             # If this step depends on a previous session, inject context from it
             if step.get("depends_on"):
                 prev_session = step["depends_on"]
-                k = step.get("inject_top_k", 1)
+                k = step.get("inject_top_k", 3)
                 prev_chunks = self.indexer.query_session(query, prev_session, k=k)
 
                 if prev_chunks:
-                    # Filter chunks with actual content (not nav noise)
                     good_chunks = [
                         c
                         for c in prev_chunks
                         if len(c.get("content", "").strip()) > 200
+                        and "switch language" not in c.get("content", "").lower()
+                        and "cookie" not in c.get("content", "").lower()
+                        and "javascript" not in c.get("content", "").lower()
+                        and "enable javascript" not in c.get("content", "").lower()
                     ]
                     if good_chunks:
                         injected_context = " ".join(
                             [c["content"][:300] for c in good_chunks[:2]]
                         )
                         query = f"{query} context: {injected_context}"
-                        print(f"💉 [{step['session']}] Injected context from '{prev_session}'")
+                        print(
+                            f"💉 [{step['session']}] Injected context from '{prev_session}'"
+                        )
+                    else:
+                        print(
+                            f"⚠️  [{step['session']}] No clean context in "
+                            f"'{prev_session}', skipping injection"
+                        )
 
             result = await self.search(
                 query=query,

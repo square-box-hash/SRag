@@ -1,12 +1,12 @@
 import asyncio
 from datetime import datetime
 import random
-import time
 
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 import trafilatura
+from playwright.async_api import async_playwright
 
 
 REALISTIC_HEADERS = [
@@ -46,7 +46,6 @@ REALISTIC_HEADERS = [
     },
 ]
 
-
 BLOCKED_DOMAINS = {
     "indianexpress.com",
     "hindustantimes.com",
@@ -62,15 +61,18 @@ BLOCKED_DOMAINS = {
     "forbes.com",
     "udemy.com",
     "coursera.org",
-    "medium.com",
     "levelup.gitconnected.com",
     "datacamp.com",
     "youtube.com",
     "youtu.be",
     "en.wikipedia.org",
     "wikipedia.org",
+    "pinterest.com",
+    "goodreturns.in",
+    "medium.com",
+    "towardsdatascience.com",
+    "betterexplained.com",
 }
-
 
 PRIORITY_DOMAINS = {
     "docs.python.org",
@@ -79,12 +81,10 @@ PRIORITY_DOMAINS = {
     "geeksforgeeks.org",
     "stackoverflow.com",
     "github.com",
-    "wikipedia.org",
     "docs.lancedb.com",
     "arxiv.org",
     "pypi.org",
 }
-
 
 FETCH_ERRORS = (
     httpx.HTTPStatusError,
@@ -99,7 +99,6 @@ FETCH_ERRORS = (
 def _get_domain(url: str) -> str:
     try:
         from urllib.parse import urlparse
-
         return urlparse(url).netloc.replace("www.", "")
     except Exception:
         return ""
@@ -111,7 +110,6 @@ def _is_blocked(url: str) -> bool:
 
 
 def _sort_urls(urls: list[tuple]) -> list[tuple]:
-    """Prioritize high quality domains, filter blocked ones."""
     filtered = [(url, title) for url, title in urls if not _is_blocked(url)]
 
     def priority_score(item):
@@ -121,15 +119,30 @@ def _sort_urls(urls: list[tuple]) -> list[tuple]:
     return sorted(filtered, key=priority_score)
 
 
+def _is_content_useful(text: str, min_chars: int = 200) -> bool:
+    """Check if extracted text is actually useful content."""
+    if len(text.strip()) < min_chars:
+        return False
+    words = text.split()
+    if not words:
+        return False
+    short_words = sum(1 for w in words if len(w) <= 3)
+    if short_words / len(words) > 0.6:
+        return False
+    return True
+
+
 class AnuInfrastructureScraper:
     def __init__(
         self,
         max_results: int = 3,
         timeout: float = 10.0,
         max_chars: int = 2000,
-        extract_mode: str = "basic",
+        extract_mode: str = "trafilatura",
         max_retries: int = 2,
         backoff_factor: float = 1.5,
+        use_playwright: bool = True,
+        playwright_timeout: float = 15.0,
     ):
         self.max_results = max_results
         self.timeout = timeout
@@ -137,22 +150,70 @@ class AnuInfrastructureScraper:
         self.extract_mode = extract_mode
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+        self.use_playwright = use_playwright
+        self.playwright_timeout = playwright_timeout
 
         if extract_mode not in ["basic", "trafilatura"]:
             raise ValueError("extract_mode must be 'basic' or 'trafilatura'")
 
+    def _expand_query(self, query: str) -> list[str]:
+        """
+        Generates semantically related search queries to broaden coverage.
+        Returns original query + up to 2 expansions.
+        """
+        expansions = [query]
+
+        # Expansion 1 — add current year for freshness
+        if "2026" not in query and "2025" not in query:
+            expansions.append(f"{query} 2026")
+
+        # Expansion 2 — rephrase with common synonyms
+        rephrase_map = {
+            "tutorial": "guide",
+            "guide": "tutorial",
+            "how to": "how do I",
+            "error": "issue fix",
+            "fix": "solution",
+            "rate": "percentage",
+            "law": "regulation",
+            "price": "cost",
+            "best": "top",
+        }
+        rephrased = query
+        for original, replacement in rephrase_map.items():
+            if original in query.lower():
+                rephrased = query.lower().replace(original, replacement)
+                break
+        if rephrased != query:
+            expansions.append(rephrased)
+
+        return expansions[:3]
+
     async def get_facts(self, query: str):
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=self.max_results + 5))
+        # Expand query for broader coverage
+        queries = self._expand_query(query)
 
-        urls = [(r["href"], r["title"]) for r in results]
+        all_urls = []
+        seen_urls = set()
 
-        urls = _sort_urls(urls)
-        urls = urls[:self.max_results]
+        for q in queries:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(q, max_results=self.max_results + 3))
+            for r in results:
+                url = r["href"]
+                if url not in seen_urls and not _is_blocked(url):
+                    seen_urls.add(url)
+                    all_urls.append((url, r["title"]))
 
-        if not urls:
-            print("⚠️  All URLs were blocked domains, no results to scrape.")
+        # Sort by domain priority and cap
+        all_urls = _sort_urls(all_urls)
+        all_urls = all_urls[:self.max_results]
+
+        if not all_urls:
+            print("⚠️  All URLs were blocked domains.")
             return []
+
+        print(f"ℹ️  Query expanded to {len(queries)} variants, {len(all_urls)} unique URLs")
 
         limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
         async with httpx.AsyncClient(
@@ -161,7 +222,8 @@ class AnuInfrastructureScraper:
             follow_redirects=True,
         ) as client:
             tasks = [
-                self._fetch_with_retry(client, url, title) for url, title in urls
+                self._fetch_with_retry(client, url, title)
+                for url, title in all_urls
             ]
             docs = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -174,13 +236,24 @@ class AnuInfrastructureScraper:
 
         return slate_entries
 
-    async def _fetch_with_retry(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        title: str,
-    ):
-        """Retry with exponential backoff on failure."""
+    async def search(self, query: str) -> list[dict]:
+        """Tavily-style search API."""
+        docs = await self.get_facts(query)
+        results = []
+        for i, d in enumerate(docs):
+            results.append({
+                "title": d["title"],
+                "url": d["source"],
+                "content": d["content"][:self.max_chars],
+                "raw_content": d["content"],
+                "score": 1.0 - i * 0.1,
+                "published_date": d.get("timestamp"),
+                "author": d.get("author"),
+            })
+        return results
+
+    async def _fetch_with_retry(self, client, url, title):
+        """Retry with exponential backoff, Playwright as final fallback."""
         last_error = None
 
         for attempt in range(self.max_retries + 1):
@@ -190,30 +263,93 @@ class AnuInfrastructureScraper:
                 last_error = e
                 if attempt < self.max_retries:
                     wait = self.backoff_factor ** attempt + random.uniform(0, 0.5)
-                    print(
-                        f"⚠️  Attempt {attempt + 1} failed [{url}]: "
-                        f"{type(e).__name__} — retrying in {wait:.1f}s"
-                    )
+                    print(f"⚠️  Attempt {attempt + 1} failed [{url}]: {type(e).__name__} — retrying in {wait:.1f}s")
                     await asyncio.sleep(wait)
                 else:
-                    print(
-                        f"❌ All {self.max_retries + 1} attempts failed [{url}]: "
-                        f"{type(last_error).__name__}"
-                    )
+                    if self.use_playwright:
+                        print(f"🎭 Falling back to Playwright for: {url}")
+                        return await self._playwright_fetch(url, title)
+                    print(f"❌ All attempts failed [{url}]: {type(last_error).__name__}")
             except Exception as e:
                 print(f"⚠️  Unexpected error [{url}]: {type(e).__name__}: {e}")
                 return None
 
         return None
 
-    async def _fetch_and_clean(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        title: str,
-    ):
-        headers = random.choice(REALISTIC_HEADERS)
+    async def _playwright_fetch(self, url: str, title: str):
+        """
+        Headless browser fallback for JS-heavy pages.
+        Only fires when httpx + trafilatura + BS4 all fail.
+        """
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                context = await browser.new_context(
+                    user_agent=random.choice(REALISTIC_HEADERS)["User-Agent"],
+                    java_script_enabled=True,
+                )
+                page = await context.new_page()
 
+                # Block images, fonts, media — only need HTML content
+                await page.route(
+                    "**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,mp4,mp3}",
+                    lambda route: route.abort()
+                )
+
+                await page.goto(
+                    url,
+                    timeout=int(self.playwright_timeout * 1000),
+                    wait_until="domcontentloaded"
+                )
+
+                # Wait for main content to load
+                await page.wait_for_timeout(1500)
+
+                html = await page.content()
+                await browser.close()
+
+            # Extract from fully rendered HTML
+            soup = BeautifulSoup(html, "html.parser")
+            clean_text = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=True,
+                no_fallback=False,
+                favor_recall=True,
+            ) or ""
+
+            if not _is_content_useful(clean_text):
+                for el in soup(["nav", "footer", "script", "style", "header"]):
+                    el.decompose()
+                clean_text = soup.get_text(separator=" ", strip=True)
+
+            clean_text = clean_text[:self.max_chars]
+
+            if not clean_text.strip():
+                print(f"⚠️  Playwright also got empty content: {url}")
+                return None
+
+            print(f"✅ Playwright succeeded: {url}")
+
+            return {
+                "source": url,
+                "title": self._extract_title(soup) or title,
+                "content": clean_text,
+                "timestamp": self._extract_date(soup) or datetime.utcnow().isoformat(),
+                "author": self._extract_author(soup),
+                "image": self._extract_image(soup),
+            }
+
+        except Exception as e:
+            print(f"❌ Playwright failed [{url}]: {type(e).__name__}: {e}")
+            return None
+
+    async def _fetch_and_clean(self, client, url, title):
+        """Primary fetch via httpx with trafilatura/BS4 extraction."""
+        headers = random.choice(REALISTIC_HEADERS)
         await asyncio.sleep(random.uniform(0.1, 0.4))
 
         resp = await client.get(url, headers=headers)
@@ -221,8 +357,9 @@ class AnuInfrastructureScraper:
         html = resp.text
 
         try:
+            soup = BeautifulSoup(html, "html.parser")
+
             if self.extract_mode == "trafilatura":
-                soup = BeautifulSoup(html, "html.parser")
                 clean_text = trafilatura.extract(
                     html,
                     include_comments=False,
@@ -230,18 +367,17 @@ class AnuInfrastructureScraper:
                     no_fallback=False,
                     favor_recall=True,
                 ) or ""
-                if len(clean_text.strip()) < 100:
-                    print(
-                        f"ℹ️  [{_get_domain(url)}] Using BS4 fallback"
-                    )
-                    for el in soup(["nav", "footer", "script", "style"]):
+
+                if not _is_content_useful(clean_text):
+                    print(f"ℹ️  [{_get_domain(url)}] Using BS4 fallback")
+                    for el in soup(["nav", "footer", "script", "style", "header"]):
                         el.decompose()
                     clean_text = soup.get_text(separator=" ", strip=True)
             else:
-                soup = BeautifulSoup(html, "html.parser")
-                for element in soup(["nav", "footer", "script", "style"]):
-                    element.decompose()
+                for el in soup(["nav", "footer", "script", "style", "header"]):
+                    el.decompose()
                 clean_text = soup.get_text(separator=" ", strip=True)
+
         except Exception as e:
             print(f"⚠️  Parsing failed [{url}]: {e}")
             return None
@@ -249,39 +385,17 @@ class AnuInfrastructureScraper:
         clean_text = clean_text[:self.max_chars]
 
         if not clean_text.strip():
-            print(f"⚠️  Empty content after extraction, skipping: {url}")
+            print(f"⚠️  Empty content, skipping: {url}")
             return None
-
-        page_title = self._extract_title(soup) or title
-        page_date = self._extract_date(soup)
-        page_author = self._extract_author(soup)
-        page_image = self._extract_image(soup)
 
         return {
             "source": url,
-            "title": page_title,
+            "title": self._extract_title(soup) or title,
             "content": clean_text,
-            "timestamp": page_date or datetime.utcnow().isoformat(),
-            "author": page_author,
-            "image": page_image,
+            "timestamp": self._extract_date(soup) or datetime.utcnow().isoformat(),
+            "author": self._extract_author(soup),
+            "image": self._extract_image(soup),
         }
-
-    async def search(self, query: str) -> list[dict]:
-        docs = await self.get_facts(query)
-        results = []
-        for i, d in enumerate(docs):
-            results.append(
-                {
-                    "title": d["title"],
-                    "url": d["source"],
-                    "content": d["content"][:self.max_chars],
-                    "raw_content": d["content"],
-                    "score": 1.0 - i * 0.1,
-                    "published_date": d.get("timestamp"),
-                    "author": d.get("author"),
-                }
-            )
-        return results
 
     def _extract_title(self, soup: BeautifulSoup) -> str | None:
         if soup.title and soup.title.string:

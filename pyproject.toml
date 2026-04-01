@@ -20,6 +20,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pandas>=2.2",              # you added is_stale() with to_pandas()
     "click>=8.1",               # if srag/cli.py uses click
+    "playwright>=1.40",
 ]
 
 [project.scripts]
