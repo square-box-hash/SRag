@@ -12,8 +12,17 @@ Built as a free alternative to Tavily, Firecrawl, and Perplexity Search APIs.
 - 🔎 **Web search** via DuckDuckGo — no API key needed, completely free
 - ⚡ **Async scraping** via `httpx` with persistent connection pooling
 - 🧹 **Smart content extraction** — trafilatura primary, BeautifulSoup fallback
+- 🎭 **Playwright fallback** — headless browser for JS-heavy pages
 - 🧠 **Vector indexing** via LanceDB + sentence-transformers
 - 📁 **Session isolation** — each research topic gets its own table, never mixed
+
+### Retrieval Quality
+- 🔀 **Query expansion** — automatic year + synonym rephrasing for broader coverage
+- ✂️ **Semantic chunking** — SmartChunker splits docs at topic boundaries, not fixed token windows
+- 🧹 **Noise filtering** — boilerplate, nav, cookie walls removed before indexing
+- 🎯 **Coherence scoring** — low coherence chunks (< 0.3) dropped before embedding
+- 🔁 **Content deduplication** — document-level hash dedup catches syndicated articles
+- 🏆 **CrossEncoder reranker** — ms-marco-MiniLM-L-6-v2 reranks retrieved chunks before returning to LLM
 
 ### Search Modes
 - **Single search** — one query, one session
@@ -22,16 +31,20 @@ Built as a free alternative to Tavily, Firecrawl, and Perplexity Search APIs.
 - **Verification search** — conflict detection across sources, structured conflict JSON
 
 ### Reliability
-- 🔁 Retry with exponential backoff on failed fetches
-- 🚫 Blocked domain filtering — skips known 403 offenders automatically
-- ⭐ Priority domain sorting — high quality sources fetched first
-- 🔀 Redirect following — handles redirect chains automatically
-- 🔇 Empty content filtering — blank pages never reach the vector store
+- 🔁 **Retry with exponential backoff** — on failed fetches
+- 🚫 **Blocked domain filtering** — skips known 403 offenders automatically
+- ⭐ **Priority domain sorting** — high quality sources fetched first
+- 🔀 **Redirect following** — handles redirect chains automatically
+- 🔇 **Empty content filtering** — blank pages never reach the vector store
 
 ### Cache Management
 - `is_stale()` — check if a session is older than a configurable TTL
 - `list_sessions()` — see all indexed sessions
 - `force_new=True` — wipe and rebuild a specific session without touching others
+
+### Infrastructure
+- 🧠 **Shared model instance** — single SentenceTransformer loaded once, shared across chunker and indexer (~90MB RAM saved)
+- 📊 **Rich chunk metadata** — coherence score, chunk index, token estimate stored per chunk in LanceDB
 
 ### CLI
 ```bash
@@ -48,7 +61,7 @@ srag stale session_name
 ## Installation
 ```bash
 # From GitHub
-pip install git+https://github.com/square-box-hash/SRag.git@v0.5.0
+pip install git+https://github.com/square-box-hash/SRag.git@v0.7.0
 
 # Local development
 git clone https://github.com/square-box-hash/SRag.git
@@ -112,18 +125,30 @@ print(sr.list_sessions())
 Query
   ↓
 SRag (orchestrator)
-  ↓                    
-DuckDuckGo (DDGS)      ← URL discovery
   ↓
-httpx async            ← parallel fetching
+DuckDuckGo (DDGS)           ← URL discovery + query expansion
   ↓
-trafilatura / BS4      ← content extraction
+httpx async                 ← parallel fetching, retry + backoff
   ↓
-sentence-transformers  ← embedding (all-MiniLM-L6-v2, 384 dims)
+Playwright (fallback)       ← JS-heavy pages
   ↓
-LanceDB                ← vector storage, session-isolated tables
+trafilatura / BS4           ← content extraction
   ↓
-query_session()        ← semantic retrieval → JSON chunks
+content hash dedup          ← document-level duplicate filtering
+  ↓
+SmartChunker                ← semantic chunking, noise filtering, coherence scoring
+  ↓
+sentence-transformers       ← embedding (all-MiniLM-L6-v2, 384 dims)
+  ↓
+coherence filter            ← drops low quality chunks (< 0.3) before indexing
+  ↓
+LanceDB                     ← vector storage, session-isolated tables
+  ↓
+query_session()             ← semantic retrieval → JSON chunks
+  ↓
+CrossEncoder reranker       ← ms-marco-MiniLM-L-6-v2, reranks candidates
+  ↓
+ranked chunks               ← returned to LLM
 ```
 
 ---
