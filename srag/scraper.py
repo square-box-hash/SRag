@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime
 import random
+import hashlib  # add to existing imports at top
 
 import httpx
 from bs4 import BeautifulSoup
@@ -78,12 +79,27 @@ PRIORITY_DOMAINS = {
     "docs.python.org",
     "fastapi.tiangolo.com",
     "realpython.com",
-    "geeksforgeeks.org",
     "stackoverflow.com",
-    "github.com",
     "docs.lancedb.com",
     "arxiv.org",
-    "pypi.org",
+    "britannica.com",
+    "sciencedirect.com",
+    "nature.com",
+    "scholar.google.com",
+    "ncbi.nlm.nih.gov",
+    "incometax.gov.in",
+    "gst.gov.in",
+    "mospi.gov.in",            # Ministry of Statistics
+    "rbi.org.in",              # Reserve Bank of India 
+    "pib.gov.in",              # Press Information Bureau
+    "developers.google.com", 
+    "developer.mozilla.org",   # MDN — web standards
+    "huggingface.co",          # ML models/docs
+    "pytorch.org",
+    "tensorflow.org",
+    "khanacademy.org",
+    "mit.edu",
+    "nptel.ac.in", 
 }
 
 FETCH_ERRORS = (
@@ -227,12 +243,28 @@ class AnuInfrastructureScraper:
             ]
             docs = await asyncio.gather(*tasks, return_exceptions=True)
 
+        seen_hashes = set()
         slate_entries = []
         for d in docs:
-            if isinstance(d, dict):
-                slate_entries.append(d)
-            elif isinstance(d, Exception):
+            if isinstance(d, Exception):
+                if "429" in str(d):
+                    print(f"⚠️  Rate limited on one of the fetches: {d}")
+                else:
+                    print(f"⚠️  Error during fetching: {type(d).__name__}: {d}")
+                continue
+            if not isinstance(d, dict):
                 print(f"⚠️  Unhandled exception: {type(d).__name__}: {d}")
+                continue
+
+            # Check for duplicate content using hash
+            content_snippet = d.get("content", "")[:500]  # Use first 500 chars for hashing
+            content_hash = hashlib.md5(content_snippet.encode()).hexdigest()
+            if content_hash in seen_hashes:
+                print(f"⚠️  Duplicate content found for URL: {d.get('source', '')}")
+                continue
+            seen_hashes.add(content_hash)
+
+            slate_entries.append(d)
 
         return slate_entries
 

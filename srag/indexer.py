@@ -20,6 +20,8 @@ class IndexedChunk:
     content: str
     timestamp: str
     author: Optional[str]
+    chunk_index: int
+    coherence_score: float
 
 
 class SRagIndexer:
@@ -27,6 +29,7 @@ class SRagIndexer:
         self,
         db_path: str = "./srag_db",
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model: Optional[SentenceTransformer] = None,
     ):
         self.db = lancedb.connect(db_path)
         self.model = SentenceTransformer(model_name)
@@ -38,6 +41,8 @@ class SRagIndexer:
             pa.field("url", pa.string()),
             pa.field("timestamp", pa.string()),
             pa.field("author", pa.string()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("coherence_score", pa.float32()),
             pa.field("embedding", pa.list_(pa.float32(), 384)),
         ])
 
@@ -56,6 +61,7 @@ class SRagIndexer:
         docs: List[dict],
         table_name: str = "web_chunks",
         force_new: bool = False,
+        min_coherence: float = 0.3,
     ):
         if not docs:
             return
@@ -65,6 +71,12 @@ class SRagIndexer:
         rows = []
 
         for i, d in enumerate(docs):
+            # Source validation — drop low coherence chunks
+            coherence = d.get("coherence_score", 1.0)
+            if coherence < min_coherence:
+                print(f"⚠️  Dropping low coherence chunk ({coherence:.2f}): {d.get('title', '')}")
+                continue
+
             source_url = d.get("url") or d.get("source") or "unknown_url"
             row_id = hashlib.md5(
                 f"{source_url}_{timestamp_prefix}_{i}".encode()
@@ -77,7 +89,13 @@ class SRagIndexer:
                 "content": d.get("content") or "",
                 "timestamp": d.get("timestamp") or "",
                 "author": d.get("author") or "",
+                "chunk_index": d.get("chunk_index", 0),
+                "coherence_score": float(coherence),
             })
+
+        if not rows:
+            print(f"⚠️  [{table_name}] All chunks dropped by coherence filter.")
+            return
 
         embeddings = self._embed([r["content"] for r in rows])
         for r, emb in zip(rows, embeddings):
@@ -85,6 +103,7 @@ class SRagIndexer:
 
         table.add(rows)
         print(f"📦 [{table_name}] Indexed {len(rows)} chunks.")
+        return len(rows)
 
     def semantic_search(
         self,
@@ -92,7 +111,7 @@ class SRagIndexer:
         table_name: str = "web_chunks",
         k: int = 5,
     ) -> List[dict]:
-        """Vector search with URL dedup so you don't get multiple chunks per page."""
+        """Vector search with ID-based dedup — multiple chunks per page allowed."""
         if table_name not in self.db.table_names():
             print(f"⚠️  Table '{table_name}' not found.")
             return []
@@ -103,16 +122,16 @@ class SRagIndexer:
         results = (
             table.search(q_vec, vector_column_name="embedding")
             .metric("cosine")
-            .limit(k * 2)  # fetch extra, then dedup
+            .limit(k * 2)
             .to_list()
         )
 
-        seen_urls = set()
+        seen_ids = set()
         deduped: List[dict] = []
         for r in results:
-            url = r.get("url", "")
-            if url not in seen_urls:
-                seen_urls.add(url)
+            rid = r.get("id", "")
+            if rid not in seen_ids:
+                seen_ids.add(rid)
                 deduped.append(r)
             if len(deduped) >= k:
                 break
@@ -120,11 +139,7 @@ class SRagIndexer:
         return deduped
 
     def query_session(self, query: str, session: str, k: int = 5) -> List[dict]:
-        """
-        Semantic search restricted to a given session table.
-        """
         return self.semantic_search(query=query, table_name=session, k=k)
 
     def list_sessions(self) -> List[str]:
-        """Returns all indexed session names."""
         return self.db.table_names()

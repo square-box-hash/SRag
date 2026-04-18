@@ -1,8 +1,25 @@
 import asyncio
 from typing import List, Optional
+import sentence_transformers
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import logging
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
+from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder
 
 from srag.scraper import AnuInfrastructureScraper
 from srag.indexer import SRagIndexer
+from srag.chunker import SmartChunker
+
+
+def _extract_core(text: str) -> str:
+    # Skip past any author/date header lines
+    lines = [l.strip() for l in text.splitlines() if len(l.strip()) > 40]
+    return lines[0][:80] if lines else text[:80]
 
 
 class SRagOrchestrator:
@@ -13,13 +30,41 @@ class SRagOrchestrator:
         extract_mode: str = "trafilatura",
         max_concurrent: int = 5,
         db_path: str = "./srag_db",
+        rerank_top_k: int = 5,
     ):
         self.max_results = max_results
         self.max_chars = max_chars
         self.extract_mode = extract_mode
         self.max_concurrent = max_concurrent
-        self.indexer = SRagIndexer(db_path=db_path)
+        self.rerank_top_k = rerank_top_k
+
+        # Use a single shared model instance
+        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+        self.indexer = SRagIndexer(db_path=db_path, model=self.model)
         self.semaphore = asyncio.Semaphore(max_concurrent)
+
+        self.chunker = SmartChunker(
+            model=self.model,
+            max_tokens=256
+        )
+
+        self.reranker = CrossEncoder(
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            max_length=512,
+        )
+
+
+    def _rerank(self, query: str, chunks: List[dict], top_k: Optional[int] = None) -> List[dict]:
+        if not chunks:
+            return chunks
+
+        k = top_k or self.rerank_top_k
+        pairs = [(query, c.get("content", "")) for c in chunks]
+        scores = self.reranker.predict(pairs)
+        ranked = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)
+        return [chunk for _, chunk in ranked[:k]]
+
 
     def _make_scraper(self):
         return AnuInfrastructureScraper(
@@ -27,6 +72,7 @@ class SRagOrchestrator:
             max_chars=self.max_chars,
             extract_mode=self.extract_mode,
         )
+
 
     # ── Core single search ────────────────────────────────────────────────────
     async def search(
@@ -38,7 +84,7 @@ class SRagOrchestrator:
     ) -> dict:
         async with self.semaphore:
             scraper = self._make_scraper()
-            if max_results:
+            if max_results is not None:
                 scraper.max_results = max_results
 
             print(f"🔍 [{session}] Searching: {query}")
@@ -54,26 +100,57 @@ class SRagOrchestrator:
                     "docs": [],
                 }
 
-            self.indexer.index_documents(docs, table_name=session, force_new=force_new)
-            print(f"✅ [{session}] Indexed {len(docs)} docs.")
+            chunks = self.chunker.chunk_docs(docs)
+
+            if not chunks:
+                print(f"❌ [{session}] No chunks created from documents.")
+                return {
+                    "session": session,
+                    "query": query,
+                    "doc_count": len(docs),
+                    "chunk_count": 0,
+                    "success": False,
+                    "docs": docs,
+                }
+
+            print(f"🧩 [{session}] {len(docs)} docs → {len(chunks)} chunks")
+
+            # Capture how many were actually indexed (if your indexer returns a count)
+            indexed_count = self.indexer.index_documents(
+                chunks,
+                table_name=session,
+                force_new=force_new,
+            )
+
+            print(
+                f"✅ [{session}] Indexed {len(chunks)} chunks "
+                f"→ {indexed_count} indexed after coherence filter."
+            )
 
             return {
                 "session": session,
                 "query": query,
                 "doc_count": len(docs),
+                "chunk_count": len(chunks),
                 "success": True,
                 "docs": docs,
+                "chunks": chunks,
             }
+
 
     # ── Parallel search ───────────────────────────────────────────────────────
     async def parallel_search(self, plan: List[dict]) -> List[dict]:
         """
-        plan: [{"query": str, "session": str, "force_new": bool (optional)}]
+        plan: [
+            {"query": str, "session": str, "force_new": bool (optional), "max_results": int (optional)}
+        ]
         """
         print(
             f"\n🚀 Parallel search: {len(plan)} queries "
             f"(max {self.max_concurrent} concurrent)\n"
         )
+
+        import traceback
 
         async def _bounded(item):
             try:
@@ -81,8 +158,10 @@ class SRagOrchestrator:
                     query=item["query"],
                     session=item["session"],
                     force_new=item.get("force_new", False),
+                    max_results=item.get("max_results"),
                 )
             except Exception as e:
+                print(f"❌ [{item['session']}] Error: {e}\n{traceback.format_exc()}")
                 return {
                     "session": item["session"],
                     "query": item["query"],
@@ -92,15 +171,19 @@ class SRagOrchestrator:
 
         return await asyncio.gather(*[_bounded(item) for item in plan])
 
+
     # ── Sequential search ─────────────────────────────────────────────────────
     async def sequential_search(self, steps: List[dict]) -> List[dict]:
         """
         steps: [
             {"query": str, "session": str},
-            {"query": str, "session": str, "depends_on": str, "inject_top_k": int}
+            {
+                "query": str,
+                "session": str,
+                "depends_on": str,        # session name of previous step
+                "inject_top_k": int       # how many chunks to inject
+            }
         ]
-        depends_on: session name of previous step to inject context from
-        inject_top_k: how many chunks from previous session to inject into next query
         """
         print(f"\n🔗 Sequential search: {len(steps)} steps\n")
         results: List[dict] = []
@@ -108,11 +191,10 @@ class SRagOrchestrator:
         for step in steps:
             query = step["query"]
 
-            # If this step depends on a previous session, inject context from it
             if step.get("depends_on"):
                 prev_session = step["depends_on"]
                 k = step.get("inject_top_k", 3)
-                prev_chunks = self.indexer.query_session(query, prev_session, k=k)
+                prev_chunks = self.indexer.query_session(query, prev_session, k=k * 2)
 
                 if prev_chunks:
                     good_chunks = [
@@ -124,13 +206,13 @@ class SRagOrchestrator:
                         and "javascript" not in c.get("content", "").lower()
                         and "enable javascript" not in c.get("content", "").lower()
                     ]
+
                     if good_chunks:
-                        injected_context = " ".join(
-                            [c["content"][:300] for c in good_chunks[:2]]
-                        )
-                        query = f"{query} context: {injected_context}"
+                        good_chunks = self._rerank(query, good_chunks, top_k=k)
+                        injected_context = _extract_core(good_chunks[0]["content"])
+                        query = f"{query} {injected_context}"
                         print(
-                            f"💉 [{step['session']}] Injected context from '{prev_session}'"
+                            f"💉 [{step['session']}] Injected reranked context from '{prev_session}'"
                         )
                     else:
                         print(
@@ -146,6 +228,7 @@ class SRagOrchestrator:
             results.append(result)
 
         return results
+
 
     # ── Verification search ───────────────────────────────────────────────────
     async def verify(self, query: str, session: str) -> dict:
@@ -181,12 +264,8 @@ class SRagOrchestrator:
             "success": True,
         }
 
+
     def _detect_conflicts(self, docs: List[dict]) -> List[dict]:
-        """
-        Basic conflict detection — flags docs with significantly
-        different timestamps on the same topic as potential conflicts.
-        Supervisor handles resolution, SRag only surfaces.
-        """
         if len(docs) < 2:
             return []
 
@@ -203,7 +282,7 @@ class SRagOrchestrator:
                     continue
                 seen_pairs.add(pair_key)
 
-                ts_a = doc_a.get("timestamp", "")[:7]  # YYYY-MM
+                ts_a = doc_a.get("timestamp", "")[:7]
                 ts_b = doc_b.get("timestamp", "")[:7]
 
                 if ts_a and ts_b and ts_a != ts_b:
@@ -230,12 +309,9 @@ class SRagOrchestrator:
 
         return conflicts
 
+
     # ── Cache management ──────────────────────────────────────────────────────
     def is_stale(self, session: str, max_age_hours: int = 24) -> bool:
-        """
-        Checks if a session's data is older than max_age_hours.
-        Returns True if stale or session doesn't exist.
-        """
         if session not in self.indexer.list_sessions():
             return True
 
@@ -250,14 +326,20 @@ class SRagOrchestrator:
         latest = rows["timestamp"].max()
 
         try:
-            ts = datetime.fromisoformat(latest).replace(tzinfo=timezone.utc)
-            age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+            dt = datetime.fromisoformat(latest)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
             return age_hours > max_age_hours
         except Exception:
-            return True
+            return True  # treat malformed / missing timestamps as stale
+
 
     def list_sessions(self) -> List[str]:
         return self.indexer.list_sessions()
 
+
     def query(self, query: str, session: str, k: int = 5) -> List[dict]:
-        return self.indexer.query_session(query, session, k=k)
+        # Fetch more candidates than needed, then rerank down to k
+        candidates = self.indexer.query_session(query, session, k=k * 2)
+        return self._rerank(query, candidates, top_k=k)

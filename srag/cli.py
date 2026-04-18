@@ -95,7 +95,7 @@ Examples:
                 force_new=args.force_new,
             )
             if result["success"]:
-                print(f"\n✅ Indexed {result['doc_count']} docs into session '{args.session}'")
+                print(f"\n✅ {result['doc_count']} docs → {result['chunk_count']} chunks indexed into session '{args.session}'")
             else:
                 print(f"\n❌ Indexing failed for session '{args.session}'")
 
