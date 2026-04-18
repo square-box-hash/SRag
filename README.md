@@ -1,4 +1,4 @@
-# SRag (Smart RAG) v0.5.0
+# SRag (Smart RAG) v0.7.0
 
 SRag is a local, self-hosted Python library that provides web search, scraping, and vector indexing in a single pipeline — purpose-built as the retrieval layer for LLM/RAG workflows.
 
@@ -134,8 +134,8 @@ query_session()        ← semantic retrieval → JSON chunks
 |---------|-------|
 | ✅ v0.4.0 | Core pipeline — search, scrape, index, CLI |
 | ✅ v0.5.0 | Parallel + sequential + verification search, unified API |
-| 🔜 v0.6.0 | Playwright headless browser for JS-heavy pages, semantic chunking, query expansion |
-| 🔜 v0.7.0 | Reranker, caching, source validation, domain-aware search |
+| ✅ v0.6.0 | Playwright headless browser for JS-heavy pages, semantic chunking, query expansion |
+| ✅ v0.7.0 | Reranker, caching, source validation, domain-aware search |
 | 🔜 v0.8.0 | Adaptive concurrency, smart context builder, token budgeting |
 | 🔜 v0.9.0 | Trace logs, timing info, comprehensive error handling |
 | 🔜 v1.0.0 | PyPI publish — stable, documented, production-ready |
