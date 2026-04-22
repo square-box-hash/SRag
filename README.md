@@ -161,7 +161,7 @@ ranked chunks               ← returned to LLM
 | ✅ v0.5.0 | Parallel + sequential + verification search, unified API |
 | ✅ v0.6.0 | Playwright headless browser for JS-heavy pages, semantic chunking, query expansion |
 | ✅ v0.7.0 | Reranker, caching, source validation, domain-aware search |
-| 🔜 v0.8.0 | Adaptive concurrency, smart context builder, token budgeting |
+| 🔜 v0.8.0 | Reputation as first class signal, Self evolving query intelligence via lexicon, Adaptive feedback loop, Adaptive concurrency, smart context builder, token budgeting |
 | 🔜 v0.9.0 | Trace logs, timing info, comprehensive error handling |
 | 🔜 v1.0.0 | PyPI publish — stable, documented, production-ready |
 
