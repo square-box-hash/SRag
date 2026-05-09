@@ -54,6 +54,8 @@ srag query "question" --session name
 srag verify "query" --session name
 srag sessions
 srag stale session_name
+srag read <url|index>
+srag inspect "query" --show {all,reputation,lexicon,candidates,chunks,collector}
 ```
 
 ---
@@ -161,7 +163,7 @@ ranked chunks               ← returned to LLM
 | ✅ v0.5.0 | Parallel + sequential + verification search, unified API |
 | ✅ v0.6.0 | Playwright headless browser for JS-heavy pages, semantic chunking, query expansion |
 | ✅ v0.7.0 | Reranker, caching, source validation, domain-aware search |
-| 🔜 v0.8.0 | Reputation as first class signal, Self evolving query intelligence via lexicon, Adaptive feedback loop, Adaptive concurrency, smart context builder, token budgeting |
+| ✅ v0.8.0 | Topic-aware lexicon, coherence scoring, CLI reader (srag read), inspect tooling (srag inspect), result caching for indexed read-by-number
 | 🔜 v0.9.0 | Trace logs, timing info, comprehensive error handling |
 | 🔜 v1.0.0 | PyPI publish — stable, documented, production-ready |
 
