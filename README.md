@@ -1,4 +1,4 @@
-# SRag (Smart RAG) v0.7.0
+# SRag (Smart RAG) v0.8.0
 
 SRag is a local, self-hosted Python library that provides web search, scraping, and vector indexing in a single pipeline — purpose-built as the retrieval layer for LLM/RAG workflows.
 
