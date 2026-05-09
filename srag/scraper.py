@@ -1,7 +1,10 @@
 import asyncio
-from datetime import datetime
+import hashlib
+import logging
 import random
-import hashlib  # add to existing imports at top
+import time
+from datetime import datetime
+from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -9,6 +12,21 @@ from ddgs import DDGS
 import trafilatura
 from playwright.async_api import async_playwright
 
+from srag.collector import SideChannelCollector
+from srag.adaptive_concurrency import ConcurrencyController, ManagedSlot
+
+logger = logging.getLogger(__name__)
+
+# ── Timeouts ──────────────────────────────────────────────────────────────────
+
+TOTAL_SESSION_TIMEOUT = 45.0
+PER_URL_TIMEOUT = 10.0
+PLAYWRIGHT_TIMEOUT = 15.0
+
+# Global semaphore: limit concurrent Playwright browser instances
+_PLAYWRIGHT_SEMAPHORE = asyncio.Semaphore(2)
+
+# ── Headers / domains ─────────────────────────────────────────────────────────
 
 REALISTIC_HEADERS = [
     {
@@ -19,7 +37,7 @@ REALISTIC_HEADERS = [
         ),
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "identity",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     },
@@ -31,7 +49,7 @@ REALISTIC_HEADERS = [
         ),
         "Accept-Language": "en-GB,en;q=0.8",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "identity",
         "Connection": "keep-alive",
     },
     {
@@ -42,7 +60,7 @@ REALISTIC_HEADERS = [
         ),
         "Accept-Language": "en-US,en;q=0.7",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "identity",
         "Connection": "keep-alive",
     },
 ]
@@ -61,7 +79,6 @@ BLOCKED_DOMAINS = {
     "businessinsider.com",
     "forbes.com",
     "udemy.com",
-    "coursera.org",
     "levelup.gitconnected.com",
     "datacamp.com",
     "youtube.com",
@@ -73,33 +90,50 @@ BLOCKED_DOMAINS = {
     "medium.com",
     "towardsdatascience.com",
     "betterexplained.com",
+    "suzukacircuit.jp",
+    "motorsporttickets.com",
+    "f1experiences.com",
+    "plainenglish.io",
+    "pub.towardsai.net",
+    "towardsai.net",
+    "informalnewz.com",
+    "formulaonehistory.com",
+    "bestcalendarprintable",
+    "motorbiscuit.com",
+    "f1dailybrief.com",
+    "gpfans.com",
+    "formulaonehistory.com",
+    "f1-fansite.com",
+    "motorsportstats.com",
+    "total-motorsport.com",
 }
 
 PRIORITY_DOMAINS = {
     "docs.python.org",
     "fastapi.tiangolo.com",
     "realpython.com",
-    "stackoverflow.com",
     "docs.lancedb.com",
     "arxiv.org",
+    "stackoverflow.com",
     "britannica.com",
     "sciencedirect.com",
     "nature.com",
-    "scholar.google.com",
     "ncbi.nlm.nih.gov",
     "incometax.gov.in",
     "gst.gov.in",
-    "mospi.gov.in",            # Ministry of Statistics
-    "rbi.org.in",              # Reserve Bank of India 
-    "pib.gov.in",              # Press Information Bureau
-    "developers.google.com", 
-    "developer.mozilla.org",   # MDN — web standards
-    "huggingface.co",          # ML models/docs
+    "mospi.gov.in",
+    "rbi.org.in",
+    "pib.gov.in",
+    "developers.google.com",
+    "developer.mozilla.org",
+    "huggingface.co",
     "pytorch.org",
     "tensorflow.org",
     "khanacademy.org",
     "mit.edu",
-    "nptel.ac.in", 
+    "nptel.ac.in",
+    "formula1.com",
+    "espncricinfo.com",
 }
 
 FETCH_ERRORS = (
@@ -115,28 +149,13 @@ FETCH_ERRORS = (
 def _get_domain(url: str) -> str:
     try:
         from urllib.parse import urlparse
+
         return urlparse(url).netloc.replace("www.", "")
     except Exception:
         return ""
 
 
-def _is_blocked(url: str) -> bool:
-    domain = _get_domain(url)
-    return any(blocked in domain for blocked in BLOCKED_DOMAINS)
-
-
-def _sort_urls(urls: list[tuple]) -> list[tuple]:
-    filtered = [(url, title) for url, title in urls if not _is_blocked(url)]
-
-    def priority_score(item):
-        domain = _get_domain(item[0])
-        return 0 if any(p in domain for p in PRIORITY_DOMAINS) else 1
-
-    return sorted(filtered, key=priority_score)
-
-
 def _is_content_useful(text: str, min_chars: int = 200) -> bool:
-    """Check if extracted text is actually useful content."""
     if len(text.strip()) < min_chars:
         return False
     words = text.split()
@@ -148,17 +167,24 @@ def _is_content_useful(text: str, min_chars: int = 200) -> bool:
     return True
 
 
+# ── Scraper ───────────────────────────────────────────────────────────────────
+
+
 class AnuInfrastructureScraper:
     def __init__(
         self,
         max_results: int = 3,
-        timeout: float = 10.0,
+        timeout: float = PER_URL_TIMEOUT,
         max_chars: int = 2000,
         extract_mode: str = "trafilatura",
         max_retries: int = 2,
         backoff_factor: float = 1.5,
         use_playwright: bool = True,
-        playwright_timeout: float = 15.0,
+        playwright_timeout: float = PLAYWRIGHT_TIMEOUT,
+        concurrency_controller: Optional[ConcurrencyController] = None,
+        query_intelligence=None,  # QueryIntelligence | None
+        topic_classifier=None,  # TopicClassifier | None
+        reputation_selector=None,  # ReputationAwareSelector | None
     ):
         self.max_results = max_results
         self.timeout = timeout
@@ -168,182 +194,335 @@ class AnuInfrastructureScraper:
         self.backoff_factor = backoff_factor
         self.use_playwright = use_playwright
         self.playwright_timeout = playwright_timeout
+        self.controller = concurrency_controller or ConcurrencyController()
+        self.query_intelligence = query_intelligence
+        self.topic_classifier = topic_classifier
+        self.reputation_selector = reputation_selector
 
         if extract_mode not in ["basic", "trafilatura"]:
             raise ValueError("extract_mode must be 'basic' or 'trafilatura'")
 
-    def _expand_query(self, query: str) -> list[str]:
+    async def get_facts(
+        self,
+        query: str,
+        collector: Optional[SideChannelCollector] = None,
+    ) -> list[dict]:
         """
-        Generates semantically related search queries to broaden coverage.
-        Returns original query + up to 2 expansions.
+        Full scrape pipeline with timeout + cancellation control.
+        Returns partial results if session deadline is hit.
         """
-        expansions = [query]
+        # ── Topic + query intelligence ────────────────────────────────────────
+        topic = "general"
+        ambiguous = False
 
-        # Expansion 1 — add current year for freshness
-        if "2026" not in query and "2025" not in query:
-            expansions.append(f"{query} 2026")
+        if self.topic_classifier:
+            topic_result = self.topic_classifier.predict(query)
+            topic = topic_result.primary
+            ambiguous = topic_result.ambiguous
+            logger.debug(
+                "Topic: %s (%.2f) ambiguous=%s",
+                topic,
+                topic_result.confidence,
+                ambiguous,
+            )
 
-        # Expansion 2 — rephrase with common synonyms
-        rephrase_map = {
-            "tutorial": "guide",
-            "guide": "tutorial",
-            "how to": "how do I",
-            "error": "issue fix",
-            "fix": "solution",
-            "rate": "percentage",
-            "law": "regulation",
-            "price": "cost",
-            "best": "top",
-        }
-        rephrased = query
-        for original, replacement in rephrase_map.items():
-            if original in query.lower():
-                rephrased = query.lower().replace(original, replacement)
-                break
-        if rephrased != query:
-            expansions.append(rephrased)
+        # ── Query variants ────────────────────────────────────────────────────
+        if self.query_intelligence:
+            plan = self.query_intelligence.rewrite(query, topic, ambiguous)
+            queries = plan.get_queries()
+            logger.debug("Query plan: %s", plan.summary())
+        else:
+            queries = [query]
 
-        return expansions[:3]
-
-    async def get_facts(self, query: str):
-        # Expand query for broader coverage
-        queries = self._expand_query(query)
-
-        all_urls = []
-        seen_urls = set()
+        # ── URL discovery ─────────────────────────────────────────────────────
+        all_urls: list[tuple[str, str]] = []
+        seen_urls: set[str] = set()
 
         for q in queries:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(q, max_results=self.max_results + 3))
-            for r in results:
-                url = r["href"]
-                if url not in seen_urls and not _is_blocked(url):
-                    seen_urls.add(url)
-                    all_urls.append((url, r["title"]))
-
-        # Sort by domain priority and cap
-        all_urls = _sort_urls(all_urls)
-        all_urls = all_urls[:self.max_results]
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(q, max_results=self.max_results + 3))
+                for r in results:
+                    url = r["href"]
+                    if url not in seen_urls:
+                        seen_urls.add(url)
+                        all_urls.append((url, r["title"]))
+            except Exception as e:
+                logger.warning("DDGS search failed for query '%s': %s", q, e)
+                continue
 
         if not all_urls:
-            print("⚠️  All URLs were blocked domains.")
+            logger.warning("No URLs found for query: %s", query)
             return []
 
-        print(f"ℹ️  Query expanded to {len(queries)} variants, {len(all_urls)} unique URLs")
+        # ── URL selection (reputation-aware) ──────────────────────────────────
+        if self.reputation_selector:
+            all_urls = self.reputation_selector.select(
+                urls=all_urls,
+                topic=topic,
+                max_urls=self.max_results,
+            )
+        else:
+            # Fallback — basic domain filter + cap
+            all_urls = [
+                (url, title)
+                for url, title in all_urls
+                if not any(b in _get_domain(url) for b in BLOCKED_DOMAINS)
+            ][: self.max_results]
 
+        if not all_urls:
+            logger.warning("All URLs filtered out for query: %s", query)
+            return []
+
+        logger.info(
+            "Query expanded to %d variants, %d unique URLs (topic=%s)",
+            len(queries),
+            len(all_urls),
+            topic,
+        )
+
+        # ── Fetch with session timeout ────────────────────────────────────────
         limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
+
         async with httpx.AsyncClient(
             timeout=self.timeout,
             limits=limits,
             follow_redirects=True,
         ) as client:
+            loop = asyncio.get_event_loop()
             tasks = [
-                self._fetch_with_retry(client, url, title)
+                loop.create_task(
+                    self._fetch_with_retry(client, url, title, collector)
+                )
                 for url, title in all_urls
             ]
-            docs = await asyncio.gather(*tasks, return_exceptions=True)
 
-        seen_hashes = set()
-        slate_entries = []
-        for d in docs:
+            try:
+                # Session-level deadline — return partial results if hit
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=TOTAL_SESSION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Session timeout (%.1fs) hit — returning partial results",
+                    TOTAL_SESSION_TIMEOUT,
+                )
+
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                # Cancel remaining tasks and collect completed ones
+                results = []
+                for task in tasks:
+                    if task.done() and not task.cancelled():
+                        try:
+                            results.append(task.result())
+                        except Exception as e:
+                            logger.warning("Task failed: %s", e)
+                            results.append(e)
+
+        # ── Log results ────────────────────────────────────────────────────────
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning("Fetch error: %s", r)
+            elif r is None:
+                logger.info("No content fetched for one URL.")
+            else:
+                logger.info(
+                    "Fetched content from %s (length=%d)",
+                    r["source"],
+                    len(r["content"]),
+                )
+
+        # ── Dedup + filter ────────────────────────────────────────────────────
+        seen_hashes: set[str] = set()
+        slate_entries: list[dict] = []
+
+        for d in results:
             if isinstance(d, Exception):
                 if "429" in str(d):
-                    print(f"⚠️  Rate limited on one of the fetches: {d}")
+                    logger.warning("Rate limited: %s", d)
                 else:
-                    print(f"⚠️  Error during fetching: {type(d).__name__}: {d}")
+                    logger.warning("Unhandled exception: %s: %s", type(d).__name__, d)
                 continue
             if not isinstance(d, dict):
-                print(f"⚠️  Unhandled exception: {type(d).__name__}: {d}")
                 continue
 
-            # Check for duplicate content using hash
-            content_snippet = d.get("content", "")[:500]  # Use first 500 chars for hashing
-            content_hash = hashlib.md5(content_snippet.encode()).hexdigest()
+            content_hash = hashlib.md5(
+                d.get("content", "")[:500].encode()
+            ).hexdigest()
+
             if content_hash in seen_hashes:
-                print(f"⚠️  Duplicate content found for URL: {d.get('source', '')}")
+                logger.info("Duplicate content skipped: %s", d.get("source", ""))
                 continue
-            seen_hashes.add(content_hash)
 
+            seen_hashes.add(content_hash)
             slate_entries.append(d)
 
         return slate_entries
 
     async def search(self, query: str) -> list[dict]:
-        """Tavily-style search API."""
-        docs = await self.get_facts(query)
-        results = []
-        for i, d in enumerate(docs):
-            results.append({
-                "title": d["title"],
-                "url": d["source"],
-                "content": d["content"][:self.max_chars],
-                "raw_content": d["content"],
-                "score": 1.0 - i * 0.1,
-                "published_date": d.get("timestamp"),
-                "author": d.get("author"),
-            })
+        """Tavily-style search API — routes through full pipeline."""
+        collector = SideChannelCollector()
+        docs = await self.get_facts(query, collector=collector)
+        results: list[dict] = []
+        for i, d in enumerate(docs, start=1):
+            results.append(
+                {
+                    "title": d["title"],
+                    "url": d["source"],
+                    "content": d["content"][: self.max_chars],
+                    "raw_content": d["content"],
+                    "score": 1.0 - i * 0.1,
+                    "published_date": d.get("timestamp"),
+                    "author": d.get("author"),
+                    "domain": _get_domain(d["source"]),
+                    "topic": d.get("topic", "general"),
+                }
+            )
         return results
 
-    async def _fetch_with_retry(self, client, url, title):
-        """Retry with exponential backoff, Playwright as final fallback."""
-        last_error = None
+    async def _fetch_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        title: str,
+        collector: Optional[SideChannelCollector] = None,
+    ) -> Optional[dict]:
+        """Retry with exponential backoff + cancellation handling."""
+        domain = _get_domain(url)
+        last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
+            start = time.monotonic()
             try:
-                return await self._fetch_and_clean(client, url, title)
+                async with ManagedSlot(self.controller, domain) as token:
+                    result = await self._fetch_and_clean(client, url, title)
+                    latency = token.elapsed()
+
+                    self.controller.record(token, latency=latency, failed=False)
+
+                    if collector:
+                        collector.record_fetch(
+                            domain=domain,
+                            url=url,
+                            latency=latency,
+                            failed=False,
+                            content_empty=result is None,
+                        )
+                    return result
+
+            except asyncio.CancelledError:
+                logger.debug("Fetch cancelled: %s", url)
+                if collector:
+                    collector.record_fetch(
+                        domain=domain,
+                        url=url,
+                        latency=time.monotonic() - start,
+                        failed=True,
+                    )
+                # propagate cancellation — don't swallow
+                raise
+
             except FETCH_ERRORS as e:
+                latency = time.monotonic() - start
                 last_error = e
+                rate_limited = "429" in str(e)
+
+                if collector:
+                    collector.record_fetch(
+                        domain=domain,
+                        url=url,
+                        latency=latency,
+                        failed=True,
+                        rate_limited=rate_limited,
+                        status_code=getattr(
+                            getattr(e, "response", None), "status_code", None
+                        ),
+                    )
+
+                # synthetic token for recording failures on domain
+                self.controller.record(
+                    token=type(
+                        "T",
+                        (),
+                        {"domain": domain, "acquired_at": start, "effective": 1},
+                    )(),
+                    latency=latency,
+                    failed=True,
+                    rate_limited=rate_limited,
+                )
+
                 if attempt < self.max_retries:
-                    wait = self.backoff_factor ** attempt + random.uniform(0, 0.5)
-                    print(f"⚠️  Attempt {attempt + 1} failed [{url}]: {type(e).__name__} — retrying in {wait:.1f}s")
+                    wait = self.backoff_factor**attempt + random.uniform(0, 0.5)
+                    logger.warning(
+                        "Attempt %d failed [%s]: %s — retrying in %.1fs",
+                        attempt + 1,
+                        url,
+                        type(e).__name__,
+                        wait,
+                    )
                     await asyncio.sleep(wait)
                 else:
                     if self.use_playwright:
-                        print(f"🎭 Falling back to Playwright for: {url}")
-                        return await self._playwright_fetch(url, title)
-                    print(f"❌ All attempts failed [{url}]: {type(last_error).__name__}")
+                        logger.info("Falling back to Playwright: %s", url)
+                        return await self._playwright_fetch(url, title, collector)
+                    logger.error(
+                        "All attempts failed [%s]: %s",
+                        url,
+                        type(last_error).__name__ if last_error else "Unknown",
+                    )
+
             except Exception as e:
-                print(f"⚠️  Unexpected error [{url}]: {type(e).__name__}: {e}")
+                logger.warning(
+                    "Unexpected error [%s]: %s: %s", url, type(e).__name__, e
+                )
+                if collector:
+                    collector.record_fetch(
+                        domain=domain,
+                        url=url,
+                        latency=time.monotonic() - start,
+                        failed=True,
+                    )
                 return None
 
         return None
 
-    async def _playwright_fetch(self, url: str, title: str):
-        """
-        Headless browser fallback for JS-heavy pages.
-        Only fires when httpx + trafilatura + BS4 all fail.
-        """
+    async def _playwright_fetch(
+        self,
+        url: str,
+        title: str,
+        collector: Optional[SideChannelCollector] = None,
+    ) -> Optional[dict]:
+        domain = _get_domain(url)
+        start = time.monotonic()
+
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
-                )
-                context = await browser.new_context(
-                    user_agent=random.choice(REALISTIC_HEADERS)["User-Agent"],
-                    java_script_enabled=True,
-                )
-                page = await context.new_page()
+            async with _PLAYWRIGHT_SEMAPHORE:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    )
+                    context = await browser.new_context(
+                        user_agent=random.choice(REALISTIC_HEADERS)["User-Agent"],
+                        java_script_enabled=True,
+                    )
+                    page = await context.new_page()
+                    await page.route(
+                        "**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,mp4,mp3}",
+                        lambda route: route.abort(),
+                    )
+                    await page.goto(
+                        url,
+                        timeout=int(self.playwright_timeout * 1000),
+                        wait_until="domcontentloaded",
+                    )
+                    await page.wait_for_timeout(1500)
+                    html = await page.content()
+                    await browser.close()
 
-                # Block images, fonts, media — only need HTML content
-                await page.route(
-                    "**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,mp4,mp3}",
-                    lambda route: route.abort()
-                )
-
-                await page.goto(
-                    url,
-                    timeout=int(self.playwright_timeout * 1000),
-                    wait_until="domcontentloaded"
-                )
-
-                # Wait for main content to load
-                await page.wait_for_timeout(1500)
-
-                html = await page.content()
-                await browser.close()
-
-            # Extract from fully rendered HTML
             soup = BeautifulSoup(html, "html.parser")
             clean_text = trafilatura.extract(
                 html,
@@ -358,29 +537,60 @@ class AnuInfrastructureScraper:
                     el.decompose()
                 clean_text = soup.get_text(separator=" ", strip=True)
 
-            clean_text = clean_text[:self.max_chars]
+            clean_text = clean_text[: self.max_chars]
+            latency = time.monotonic() - start
 
             if not clean_text.strip():
-                print(f"⚠️  Playwright also got empty content: {url}")
+                logger.warning("Playwright got empty content: %s", url)
+                if collector:
+                    collector.record_fetch(
+                        domain=domain,
+                        url=url,
+                        latency=latency,
+                        failed=False,
+                        content_empty=True,
+                    )
                 return None
 
-            print(f"✅ Playwright succeeded: {url}")
+            logger.info("Playwright succeeded: %s", url)
+            if collector:
+                collector.record_fetch(
+                    domain=domain,
+                    url=url,
+                    latency=latency,
+                    failed=False,
+                )
 
             return {
                 "source": url,
                 "title": self._extract_title(soup) or title,
                 "content": clean_text,
-                "timestamp": self._extract_date(soup) or datetime.utcnow().isoformat(),
+                "timestamp": self._extract_date(soup)
+                or datetime.utcnow().isoformat(),
                 "author": self._extract_author(soup),
                 "image": self._extract_image(soup),
             }
 
+        except asyncio.CancelledError:
+            logger.debug("Playwright fetch cancelled: %s", url)
+            raise
         except Exception as e:
-            print(f"❌ Playwright failed [{url}]: {type(e).__name__}: {e}")
+            logger.error("Playwright failed [%s]: %s: %s", url, type(e).__name__, e)
+            if collector:
+                collector.record_fetch(
+                    domain=domain,
+                    url=url,
+                    latency=time.monotonic() - start,
+                    failed=True,
+                )
             return None
 
-    async def _fetch_and_clean(self, client, url, title):
-        """Primary fetch via httpx with trafilatura/BS4 extraction."""
+    async def _fetch_and_clean(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        title: str,
+    ) -> Optional[dict]:
         headers = random.choice(REALISTIC_HEADERS)
         await asyncio.sleep(random.uniform(0.1, 0.4))
 
@@ -401,8 +611,10 @@ class AnuInfrastructureScraper:
                 ) or ""
 
                 if not _is_content_useful(clean_text):
-                    print(f"ℹ️  [{_get_domain(url)}] Using BS4 fallback")
-                    for el in soup(["nav", "footer", "script", "style", "header"]):
+                    logger.info("[%s] Using BS4 fallback", _get_domain(url))
+                    for el in soup(
+                        ["nav", "footer", "script", "style", "header"]
+                    ):
                         el.decompose()
                     clean_text = soup.get_text(separator=" ", strip=True)
             else:
@@ -411,25 +623,26 @@ class AnuInfrastructureScraper:
                 clean_text = soup.get_text(separator=" ", strip=True)
 
         except Exception as e:
-            print(f"⚠️  Parsing failed [{url}]: {e}")
+            logger.warning("Parsing failed [%s]: %s", url, e)
             return None
 
-        clean_text = clean_text[:self.max_chars]
+        clean_text = clean_text[: self.max_chars]
 
         if not clean_text.strip():
-            print(f"⚠️  Empty content, skipping: {url}")
+            logger.debug("Empty content, skipping: %s", url)
             return None
 
         return {
             "source": url,
             "title": self._extract_title(soup) or title,
             "content": clean_text,
-            "timestamp": self._extract_date(soup) or datetime.utcnow().isoformat(),
+            "timestamp": self._extract_date(soup)
+            or datetime.utcnow().isoformat(),
             "author": self._extract_author(soup),
             "image": self._extract_image(soup),
         }
 
-    def _extract_title(self, soup: BeautifulSoup) -> str | None:
+    def _extract_title(self, soup: BeautifulSoup) -> Optional[str]:
         if soup.title and soup.title.string:
             return soup.title.string.strip()
         h1 = soup.find("h1")
@@ -437,22 +650,21 @@ class AnuInfrastructureScraper:
             return h1.get_text(strip=True)
         return None
 
-    def _extract_date(self, soup: BeautifulSoup) -> str | None:
-        meta = (
-            soup.find("meta", {"property": "article:published_time"})
-            or soup.find("meta", {"name": "date"})
-        )
+    def _extract_date(self, soup: BeautifulSoup) -> Optional[str]:
+        meta = soup.find(
+            "meta", {"property": "article:published_time"}
+        ) or soup.find("meta", {"name": "date"})
         if meta and meta.get("content"):
             return meta["content"]
         return None
 
-    def _extract_author(self, soup: BeautifulSoup) -> str | None:
+    def _extract_author(self, soup: BeautifulSoup) -> Optional[str]:
         meta = soup.find("meta", {"name": "author"})
         if meta and meta.get("content"):
             return meta["content"]
         return None
 
-    def _extract_image(self, soup: BeautifulSoup) -> str | None:
+    def _extract_image(self, soup: BeautifulSoup) -> Optional[str]:
         meta = soup.find("meta", {"property": "og:image"})
         if meta and meta.get("content"):
             return meta["content"]

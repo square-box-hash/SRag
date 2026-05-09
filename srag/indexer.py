@@ -32,7 +32,7 @@ class SRagIndexer:
         model: Optional[SentenceTransformer] = None,
     ):
         self.db = lancedb.connect(db_path)
-        self.model = SentenceTransformer(model_name)
+        self.model = model if model is not None else SentenceTransformer(model_name)
 
         self.schema = pa.schema([
             pa.field("id", pa.string()),
@@ -103,7 +103,10 @@ class SRagIndexer:
 
         table.add(rows)
         print(f"📦 [{table_name}] Indexed {len(rows)} chunks.")
-        return len(rows)
+        return {
+            "total_indexed": len(rows),
+            "table_name":    table_name,                                            
+        }
 
     def semantic_search(
         self,

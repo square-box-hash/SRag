@@ -28,8 +28,8 @@ class SRag:
         )
 
     # ── Search modes ──────────────────────────────────────────────────────────
-    async def search(self, query: str, session: str, force_new: bool = False) -> dict:
-        return await self._orchestrator.search(query, session, force_new)
+    async def search(self, query, session, force_new=False, debug=False):
+        return await self._orchestrator.search(query, session, force_new, debug)
 
     async def parallel_search(self, plan: list) -> list:
         return await self._orchestrator.parallel_search(plan)
@@ -37,12 +37,42 @@ class SRag:
     async def sequential_search(self, steps: list) -> list:
         return await self._orchestrator.sequential_search(steps)
 
-    async def verify(self, query: str, session: str) -> dict:
-        return await self._orchestrator.verify(query, session)
+    async def verify(self, query, session, debug=False):
+        return await self._orchestrator.verify(query, session, debug=debug)
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
-    def query(self, question: str, session: str, k: int = 5) -> list:
-        return self._orchestrator.query(question, session, k)
+    def get_context(self, session: str) -> dict:
+        return self._orchestrator.get_context(session)
+    
+    def get_chunks(self, session: str) -> list:
+        return self._orchestrator.get_chunks(session)
+
+    def get_docs(self, session: str) -> list:
+        return self._orchestrator.get_docs(session)
+    
+    def get_doc_count(self, session: str) -> int:
+        return self._orchestrator.get_doc_count(session)
+    
+    def get_chunk_count(self, session: str) -> int:
+        return self._orchestrator.get_chunk_count(session)
+    
+    def get_indexed_count(self, session: str) -> int:
+        return self._orchestrator.get_indexed_count(session)
+    
+    def get_indexer(self) -> SRagIndexer:
+        return self._orchestrator.get_indexer()
+
+    def query(self, query, session, k=5, debug=False):
+        return self._orchestrator.query(query, session, k=k, debug=debug)
+    
+    def query_session(self, query, session, k=5, debug=False):
+        return self._orchestrator.query_session(query, session, k=k, debug=debug)
+    
+    def build_context(self, query, session, k=10, token_budget=None, debug=False):
+        return self._orchestrator.build_context(query, session, k=k, token_budget=token_budget, debug=debug)
+
+    def get_scraper(self) -> AnuInfrastructureScraper:
+        return self._orchestrator.get_scraper()
 
     # ── Cache management ──────────────────────────────────────────────────────
     def is_stale(self, session: str, max_age_hours: int = 24) -> bool:
