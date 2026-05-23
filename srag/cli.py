@@ -375,6 +375,25 @@ def _print_verify_result(result: dict, session: str) -> None:
 
     print(f"\n  {'═' * width}\n")
 
+def _print_ingest_result(result: dict, session: str) -> None:
+    """Clean output for srag ingest."""
+    width = 52
+    print(f"\n  {'═' * width}")
+
+    if result["success"]:
+        print(f"  ✅ Ingested into '{session}'")
+        print(f"  {'─' * width}")
+        print(f"  {'Source':<28} {result.get('source','')[:20]:>6}")
+        print(f"  {'Documents ingested':<28} {result.get('doc_count', 0):>6}")
+        print(f"  {'Chunks created':<28} {result.get('chunk_count', 0):>6}")
+        print(f"  {'Chunks indexed':<28} {result.get('indexed_count', 0):>6}")
+    else:
+        print(f"  ❌ Ingestion failed — no chunks produced")
+        print(f"  {'─' * width}")
+        print(f"  {'Documents read':<28} {result.get('doc_count', 0):>6}")
+
+    print(f"  {'═' * width}\n")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -398,12 +417,17 @@ Examples:
   srag search "GST rate India" --debug
   srag index "python asyncio tutorial" --session python_async
   srag index "GST rate India" --session gst --results 15 --force-new
+  srag ingest report.pdf --session research
+  srag ingest ./docs/ --session project
+  srag ingest --session mydb sqlite:///mydb.sqlite --table articles
+  srag read report.pdf
+  srag read 3
   srag query "what is the rate" --session gst
   srag query "what is the rate" --session gst --k 10 --debug
   srag verify "GST rate India" --session gst_verify
   srag sessions
   srag stale gst --hours 48
-        """
+"""
     )
 
     parser.add_argument(
@@ -424,6 +448,13 @@ Examples:
     idx.add_argument("--session",   type=str, required=True)
     idx.add_argument("--results",   type=int, default=12)
     idx.add_argument("--force-new", action="store_true")
+
+    ing = sub.add_parser("ingest", help="Ingest local files, folders or databases into a session")
+    ing.add_argument("source",      type=str, help="File path, folder path, sqlite:// or postgresql:// URI")
+    ing.add_argument("--session",   type=str, required=True)
+    ing.add_argument("--force-new", action="store_true")
+    ing.add_argument("--table",     type=str, default=None, help="Table name for DB ingestion")
+    ing.add_argument("--sql",       type=str, default=None, help="SQL query for DB ingestion")
 
     q = sub.add_parser("query", help="Semantic search within a stored session")
     q.add_argument("query",     type=str)
@@ -530,6 +561,27 @@ Examples:
 
         asyncio.run(_index())
 
+    elif args.command == "ingest":
+        from srag import SRag
+        async def _ingest():
+            sr = SRag()
+            kwargs = {}
+            if args.table:
+                kwargs["table_name"] = args.table
+            if args.sql:
+                kwargs["sql_query"] = args.sql
+
+            print(f"\n  Ingesting '{args.source}' → session '{args.session}'...\n")
+            result = sr.ingest(
+                source    = args.source,
+                session   = args.session,
+                force_new = args.force_new,
+                **kwargs,
+            )
+            _print_ingest_result(result, args.session)
+
+        asyncio.run(_ingest())
+
     elif args.command == "query":
         from srag import SRag
 
@@ -607,24 +659,39 @@ Examples:
             print(f"\n  Fetching {url}...\n")
 
             # Fetch single URL directly
-            import httpx
-            import random
-            from srag.scraper import REALISTIC_HEADERS
+            import os as _os
 
-            async with httpx.AsyncClient(
-                timeout = 15.0,
-                follow_redirects = True
-            ) as client:
-                doc = await scraper._fetch_and_clean(
-                    client,
-                    url,
-                    "Article",
-                )
-
+            if _os.path.exists(url):
+                # Local file — use ingestor
+                from srag.ingestor import DocumentIngestor
+                ingestor = DocumentIngestor()
+                try:
+                    docs = ingestor.ingest(url)
+                except Exception as e:
+                    print(f"  ❌ Could not ingest file: {e}")
+                    return
+                if not docs:
+                    print("  ❌ No readable content found in file.")
+                    return
+                doc = {
+                    "content":   "\n\n".join([d.get("content", "") for d in docs]),
+                    "title":     docs[0].get("title", _os.path.basename(url)),
+                    "author":    "",
+                    "timestamp": docs[0].get("timestamp", ""),
+                }
+                url = f"file://{_os.path.abspath(url)}"
+            else:
+                # Web URL — existing scraper logic
+                import httpx
+                from srag.scraper import REALISTIC_HEADERS
+                async with httpx.AsyncClient(
+                    timeout          = 15.0,
+                    follow_redirects = True,
+                ) as client:
+                    doc = await scraper._fetch_and_clean(client, url, "Article")
             if not doc:
                 print("  ❌ Failed to fetch or extract content.")
                 return
-
             chunks = chunker.chunk(
                 text       = doc.get("content", ""),
                 source_url = url,

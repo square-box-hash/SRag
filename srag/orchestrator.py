@@ -9,6 +9,8 @@ import lancedb
 from sentence_transformers import CrossEncoder, SentenceTransformer
 logging.getLogger("trafilatura").setLevel(logging.CRITICAL)
 
+from srag.config import SRagConfig
+from srag.config import SRagConfig
 from srag.scraper import AnuInfrastructureScraper
 from srag.indexer import SRagIndexer
 from srag.chunker import SmartChunker
@@ -45,6 +47,7 @@ COLD_START_MIN_SCRAPES = 5
 class SRagOrchestrator:
     def __init__(
         self,
+        config:        Optional[SRagConfig] = None,
         max_results:   int   = 12,
         max_chars:     int   = 2000,
         extract_mode:  str   = "trafilatura",
@@ -52,45 +55,72 @@ class SRagOrchestrator:
         db_path:       str   = "./srag_db",
         rerank_top_k:  int   = 5,
     ):
-        self.max_results  = max_results
-        self.max_chars    = max_chars
-        self.extract_mode = extract_mode
-        self.max_concurrent = max_concurrent
-        self.rerank_top_k = rerank_top_k
-
+        
+        cfg = config or SRagConfig(
+            max_results    = max_results,
+            max_chars      = max_chars,
+            extract_mode   = extract_mode,
+            max_concurrent = max_concurrent,
+            db_path        = db_path,
+            rerank_top_k   = rerank_top_k,
+        )
+        self.config = cfg
+        
         # ── Shared model instance ─────────────────────────────────────────────
         _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
         # ── Core components ───────────────────────────────────────────────────
-        self.indexer  = SRagIndexer(db_path=db_path, model=_model)
-        self.chunker  = SmartChunker(model=_model, max_tokens=256)
-        self.reranker = CrossEncoder(
-            "cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512
+        self.indexer  = SRagIndexer(db_path=cfg.db_path, model=_model)
+        self.chunker  = SmartChunker(
+            model            = _model,
+            max_tokens       = cfg.chunk_size,
+            dedupe_threshold = cfg.dedupe_threshold,
+        )
+
+        # ── Conditional reranker ──────────────────────────────────────────────
+        self.reranker = (
+            CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
+            if cfg.use_reranker else None
         )
 
         # ── Shared LanceDB connection ─────────────────────────────────────────
         _db = self.indexer.db
 
-        # ── Intelligence layer ────────────────────────────────────────────────
-        self.lexicon          = LexiconStore(db=_db)
-        self.reputation       = ReputationStore(db=_db, lexicon=self.lexicon)
-        self.topic_classifier = TopicClassifier()
-        self.query_intelligence = QueryIntelligence(lexicon=self.lexicon)
-        self.rep_selector     = ReputationAwareSelector(
-            reputation       = self.reputation,
-            priority_domains = PRIORITY_DOMAINS,
-            blocked_domains  = BLOCKED_DOMAINS,
+        # ── Conditional intelligence layer ────────────────────────────────────
+        self.lexicon = LexiconStore(db=_db) if cfg.use_lexicon else None
+        self.reputation = (
+            ReputationStore(db=_db, lexicon=self.lexicon)
+            if cfg.use_reputation else None
+        )
+        self.topic_classifier   = TopicClassifier()
+        self.query_intelligence = (
+            QueryIntelligence(lexicon=self.lexicon)
+            if cfg.use_query_intelligence else None
+        )
+        self.rep_selector = (
+            ReputationAwareSelector(
+                reputation       = self.reputation,
+                priority_domains = PRIORITY_DOMAINS,
+                blocked_domains  = BLOCKED_DOMAINS,
+            ) if cfg.use_reputation else None
         )
 
-        # ── Adaptive concurrency ──────────────────────────────────────────────
-        self.controller = ConcurrencyController()
-
-        # ── Quality + context ─────────────────────────────────────────────────
-        self.evaluator      = QualityEvaluator()
+        # ── Conditional adaptive concurrency ──────────────────────────────────
+        self.controller = (
+            ConcurrencyController()
+            if cfg.use_adaptive_concurrency else None
+        )
+        
+        # ── Conditional quality + context ─────────────────────────────────────
+        self.evaluator       = QualityEvaluator() if cfg.use_quality_evaluator else None
         self.context_builder = ContextBuilder()
 
-        # ── Semaphore for parallel search ──────────────────────────────────────
-        self.semaphore = asyncio.Semaphore(max_concurrent)
+        # ── Semaphore + stored config values ──────────────────────────────────
+        self.semaphore    = asyncio.Semaphore(cfg.max_concurrent)
+        self.max_results  = cfg.max_results
+        self.max_chars    = cfg.max_chars
+        self.extract_mode = cfg.extract_mode
+        self.rerank_top_k = cfg.rerank_top_k
 
     def _make_scraper(self) -> AnuInfrastructureScraper:
         return AnuInfrastructureScraper(
@@ -448,6 +478,13 @@ class SRagOrchestrator:
         if not chunks:
             return chunks
         k     = top_k or self.rerank_top_k
+        if not self.reranker:
+            # Fallback to coherence score ranking when reranker is disabled
+            return sorted(
+                chunks,
+                key=lambda c: c.get("coherence_score", 0),
+                reverse=True
+            )[:k]
         pairs = [(query, c.get("content", "")) for c in chunks]
         scores = self.reranker.predict(pairs)
         ranked = sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)

@@ -4,7 +4,8 @@ load_dotenv()
 from srag.orchestrator import SRagOrchestrator
 from srag.scraper import AnuInfrastructureScraper
 from srag.indexer import SRagIndexer
-
+from srag.config import SRagConfig
+from srag.ingestor import DocumentIngestor
 
 class SRag:
     """
@@ -13,6 +14,7 @@ class SRag:
     """
     def __init__(
         self,
+        config: SRagConfig = None,
         db_path: str = "./srag_db",
         max_results: int = 12,
         max_chars: int = 2000,
@@ -20,12 +22,14 @@ class SRag:
         max_concurrent: int = 5,
     ):
         self._orchestrator = SRagOrchestrator(
+            config: SRagConfig = None,
             max_results=max_results,
             max_chars=max_chars,
             extract_mode=extract_mode,
             max_concurrent=max_concurrent,
             db_path=db_path,
         )
+        self._ingestor = DocumentIngestor(config=self._orchestrator.config)
 
     # ── Search modes ──────────────────────────────────────────────────────────
     async def search(self, query, session, force_new=False, debug=False):
@@ -39,6 +43,28 @@ class SRag:
 
     async def verify(self, query, session, debug=False):
         return await self._orchestrator.verify(query, session, debug=debug)
+
+    # ── Local file + DB ingestion ─────────────────────────────────────────────
+    def ingest(self, source: str, session: str, force_new: bool = False, **kwargs) -> dict:
+        """
+        Ingest a local file, folder, or database into a session.
+        source: file path, folder path, sqlite:// or postgresql:// URI
+        """
+        docs   = self._ingestor.ingest(source, **kwargs)
+        chunks = self._orchestrator.chunker.chunk_docs(docs)
+        stats  = self._orchestrator.indexer.index_documents(
+            chunks,
+            table_name = session,
+            force_new  = force_new,
+        )
+        return {
+            "session":       session,
+            "source":        source,
+            "doc_count":     len(docs),
+            "chunk_count":   len(chunks),
+            "indexed_count": stats.get("total_indexed", 0),
+            "success":       len(chunks) > 0,
+        }
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     def get_context(self, session: str) -> dict:
@@ -80,3 +106,8 @@ class SRag:
 
     def list_sessions(self) -> list:
         return self._orchestrator.list_sessions()
+
+     # ── Config access ─────────────────────────────────────────────────────────
+    @property
+    def config(self) -> SRagConfig:
+        return self._orchestrator.config

@@ -159,7 +159,7 @@ class SmartChunker:
         deduped = []
         for s in sentences:
             if not any(_is_near_duplicate(s, existing, self.dedupe_threshold)
-                       for existing in deduped[-5:]):  # check last 5 only for speed
+                       for existing in deduped[-20:]):  # check last 20 only for speed
                 deduped.append(s)
         sentences = deduped
 
@@ -184,8 +184,15 @@ class SmartChunker:
         current_sentences = []
         current_tokens = 0
         chunk_index = 0
+        seen_sentences: set = set()
 
         for i, sentence in enumerate(sentences):
+            # ── Skip already-seen sentences ──────────────────
+            key = " ".join(sentence.lower().split())
+            if key in seen_sentences:
+                continue
+            seen_sentences.add(key)
+            # ─────────────────────────────────────────────────
             s_tokens = _estimate_tokens(sentence)
 
             # Force split at semantic boundary OR token budget exceeded
