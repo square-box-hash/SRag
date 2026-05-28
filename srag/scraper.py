@@ -5,7 +5,6 @@ import random
 import time
 from datetime import datetime
 from typing import Optional
-
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
@@ -75,20 +74,13 @@ BLOCKED_DOMAINS = {
     "ft.com",
     "nytimes.com",
     "theatlantic.com",
-    "wired.com",
-    "businessinsider.com",
-    "forbes.com",
     "udemy.com",
     "levelup.gitconnected.com",
     "datacamp.com",
     "youtube.com",
     "youtu.be",
-    "en.wikipedia.org",
-    "wikipedia.org",
     "pinterest.com",
     "goodreturns.in",
-    "medium.com",
-    "towardsdatascience.com",
     "betterexplained.com",
     "suzukacircuit.jp",
     "motorsporttickets.com",
@@ -109,6 +101,7 @@ BLOCKED_DOMAINS = {
 }
 
 PRIORITY_DOMAINS = {
+    # === Your Original List (Fully Retained) ===
     "docs.python.org",
     "fastapi.tiangolo.com",
     "realpython.com",
@@ -116,6 +109,7 @@ PRIORITY_DOMAINS = {
     "arxiv.org",
     "stackoverflow.com",
     "britannica.com",
+    "wikipedia.com",
     "sciencedirect.com",
     "nature.com",
     "ncbi.nlm.nih.gov",
@@ -134,6 +128,56 @@ PRIORITY_DOMAINS = {
     "nptel.ac.in",
     "formula1.com",
     "espncricinfo.com",
+    "cricbuzz.com",
+    "cricapi.com",
+
+    # === High-Quality Additions (Recommended) ===
+
+    # Programming & Tech Docs
+    "en.wikipedia.org",              # Better than wikipedia.com
+    "github.com",
+    "docs.microsoft.com",
+    "learn.microsoft.com",
+    "kubernetes.io",
+    "react.dev",
+    "nodejs.org",
+    "go.dev",
+    "rust-lang.org",
+    "aws.amazon.com",
+    "cloud.google.com",
+
+    # Science & Research
+    "pubmed.ncbi.nlm.nih.gov",
+    "science.org",
+    "ieee.org",
+    "semanticscholar.org",
+
+    # Education
+    "ocw.mit.edu",
+    "coursera.org",
+    "edx.org",
+    "stanford.edu",
+
+    # Government & Official (Global)
+    "indiankanoon.org",              # Indian law
+    "who.int",
+    "cdc.gov",
+
+    # Finance & Economics
+    "investopedia.com",
+    "reuters.com",
+    "economist.com",
+    "worldbank.org",
+    "imf.org",
+
+    # Business & Strategy
+    "hbr.org",                       # Harvard Business Review
+    "mckinsey.com",
+
+    # Others
+    "archive.org",
+    "mayoclinic.org",
+    "nasa.gov",
 }
 
 FETCH_ERRORS = (
@@ -184,7 +228,8 @@ class AnuInfrastructureScraper:
         concurrency_controller: Optional[ConcurrencyController] = None,
         query_intelligence=None,  # QueryIntelligence | None
         topic_classifier=None,  # TopicClassifier | None
-        reputation_selector=None,  # ReputationAwareSelector | None
+        reputation_selector=None, # ReputationAwareSelector | None
+        search_layer=None, # SearchLayer | None
     ):
         self.max_results = max_results
         self.timeout = timeout
@@ -198,6 +243,7 @@ class AnuInfrastructureScraper:
         self.query_intelligence = query_intelligence
         self.topic_classifier = topic_classifier
         self.reputation_selector = reputation_selector
+        self.search_layer = search_layer
 
         if extract_mode not in ["basic", "trafilatura"]:
             raise ValueError("extract_mode must be 'basic' or 'trafilatura'")
@@ -240,15 +286,31 @@ class AnuInfrastructureScraper:
 
         for q in queries:
             try:
-                with DDGS() as ddgs:
-                    results = list(ddgs.text(q, max_results=self.max_results + 3))
-                for r in results:
-                    url = r["href"]
-                    if url not in seen_urls:
-                        seen_urls.add(url)
-                        all_urls.append((url, r["title"]))
+                if self.search_layer:
+                    # SearchLayer — SearXNG priority + DDGS fallback
+                    search_results = await self.search_layer.search(
+                        q, max_results=self.max_results + 3
+                    )
+                    for r in search_results:
+                        if r.url and r.url not in seen_urls:
+                            seen_urls.add(r.url)
+                            all_urls.append((r.url, r.title))
+                else:
+                    # Direct DDGS fallback if no search layer configured
+                    loop = asyncio.get_event_loop()
+                    raw  = await loop.run_in_executor(
+                         None,
+                         lambda: list(DDGS().text(q, max_results=self.max_results + 3))
+                    )
+                    for r in raw:
+                        url = r.get("href", "")
+                        title = r.get("title", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_urls.append((url, r.get("body", "")))
+
             except Exception as e:
-                logger.warning("DDGS search failed for query '%s': %s", q, e)
+                logger.warning("Search error for query '%s': %s", q, e)
                 continue
 
         if not all_urls:
@@ -421,6 +483,7 @@ class AnuInfrastructureScraper:
                         url=url,
                         latency=time.monotonic() - start,
                         failed=True,
+                        content_empty = False,
                     )
                 # propagate cancellation — don't swallow
                 raise
@@ -592,7 +655,8 @@ class AnuInfrastructureScraper:
         title: str,
     ) -> Optional[dict]:
         headers = random.choice(REALISTIC_HEADERS)
-        await asyncio.sleep(random.uniform(0.1, 0.4))
+        if self.max_results > 1:
+            await asyncio.sleep(random.uniform(0.1, 0.4))
 
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()

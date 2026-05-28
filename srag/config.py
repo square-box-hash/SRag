@@ -12,6 +12,12 @@ class SRagConfig:
     use_query_intelligence:    bool = True
     use_dedup:                 bool = True
 
+    # ── Search provider settings ──────────────────────────────
+    use_searxng:           bool      = True
+    use_ddgs:              bool      = True   # always keep as fallback
+    searxng_instance:      str       = ""     # empty = auto-detect public instance
+    searxng_engines:       list      = None   # None = use default engine list
+
     # ── Retrieval settings ────────────────────────────────────
     max_results:       int   = 12
     max_chars:         int   = 2000

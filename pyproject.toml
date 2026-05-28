@@ -4,11 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srag"
-version = "0.9.0"
-description = "Smart RAG — local Tavily-style search + scrape + vector index for LLM/RAG workflows. Ingest web, PDF, DOCX, CSV, JSON, SQLite and PostgreSQL."
+version = "1.0.0"
+description = "Smart RAG — the retrieval layer for local AI agents. Replaces Tavily + Firecrawl + Perplexity with a single open-source package."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
+authors = [
+    { name = "Ayushman Mukherjee", email = "" }
+]
+keywords = [
+    "rag", "retrieval", "ai", "llm", "agents",
+    "search", "scraping", "vector", "lancedb",
+    "semantic-search", "chunking",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
 dependencies = [
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
@@ -36,9 +55,14 @@ all = [
     "psycopg2-binary>=2.9",
 ]
 
+[project.urls]
+Homepage   = "https://github.com/square-box-hash/SRag"
+Repository = "https://github.com/square-box-hash/SRag"
+Issues     = "https://github.com/square-box-hash/SRag/issues"
+
 [project.scripts]
 srag = "srag.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where   = ["."]
 include = ["srag*"]
