@@ -22,7 +22,7 @@ class SRag:
         max_concurrent: int = 5,
     ):
         self._orchestrator = SRagOrchestrator(
-            config: SRagConfig = None,
+            config=config,
             max_results=max_results,
             max_chars=max_chars,
             extract_mode=extract_mode,
@@ -107,7 +107,7 @@ class SRag:
     def list_sessions(self) -> list:
         return self._orchestrator.list_sessions()
 
-     # ── Config access ─────────────────────────────────────────────────────────
+    # ── Config access ─────────────────────────────────────────────────────────
     @property
     def config(self) -> SRagConfig:
         return self._orchestrator.config
