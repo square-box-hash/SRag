@@ -7,7 +7,7 @@ name = "srag"
 version = "1.0.0"
 description = "Smart RAG — the retrieval layer for local AI agents. Replaces Tavily + Firecrawl + Perplexity with a single open-source package."
 readme = "README.md"
-License = "MIT"
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Gourav Mandi", email = "mg1139110@gmail.com" }
