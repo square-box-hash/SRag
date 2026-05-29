@@ -15,8 +15,9 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.9.0-purple.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
-[![Status](https://img.shields.io/badge/status-active-brightgreen.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
+[![Version](https://img.shields.io/badge/version-v1.0.0-purple.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
+[![PyPI](https://img.shields.io/badge/pypi-srag-orange.svg?style=flat-square)](https://pypi.org/project/srag)
+[![Status](https://img.shields.io/badge/status-stable-brightgreen.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
 
 </div>
 
@@ -28,7 +29,7 @@ SRag is a **local, self-hosted Python library and CLI** that replaces an entire 
 
 | What you'd normally pay for | SRag replaces it with |
 |---|---|
-| Tavily — search API | DuckDuckGo, zero cost, no key |
+| Tavily — search API | SearXNG + DuckDuckGo, zero cost, no key |
 | Firecrawl — scraping API | httpx + trafilatura + Playwright |
 | Perplexity — search + answer | Full RAG pipeline, local |
 | Pinecone / Weaviate — vector DB | LanceDB, embedded, session-isolated |
@@ -48,22 +49,27 @@ Most RAG tools are either too simple (just a wrapper around one API) or too comp
 
 **It's modular.** Every subsystem — the reranker, Playwright fallback, lexicon, reputation store, quality evaluator — can be toggled on or off via `SRagConfig`. Run a lightweight version with no reranker and no Playwright when RAM is tight. Run the full stack when quality matters.
 
+**It's typed.** Every public method returns a typed `SRagResult` with `.success`, `.chunks`, `.sources`, `.trace`, and output methods like `.to_prompt()`, `.to_json()`, `.to_mongodb()`. IDE-friendly, agent-ready.
+
 ---
 
 ## Installation
 
 ```bash
-# Base install
-pip install git+https://github.com/square-box-hash/SRag.git@v0.9.0
+# PyPI — stable release
+pip install srag
 
 # With PDF and DOCX support
-pip install "srag[docs] @ git+https://github.com/square-box-hash/SRag.git@v0.9.0"
+pip install srag[docs]
 
-# With database support (PostgreSQL)
-pip install "srag[databases] @ git+https://github.com/square-box-hash/SRag.git@v0.9.0"
+# With PostgreSQL support
+pip install srag[databases]
 
 # Everything
-pip install "srag[all] @ git+https://github.com/square-box-hash/SRag.git@v0.9.0"
+pip install srag[all]
+
+# Latest from GitHub
+pip install git+https://github.com/square-box-hash/SRag.git@v1.0.0
 
 # Local development
 git clone https://github.com/square-box-hash/SRag.git
@@ -89,7 +95,7 @@ from srag import SRag
 sr = SRag()
 
 # Search and index
-await sr.search("West Bengal election results 2026", session="wb_elections")
+result = await sr.search("West Bengal election results 2026", session="wb_elections")
 
 # Query the indexed session
 chunks = sr.query("who won the most seats?", session="wb_elections", k=5)
@@ -97,6 +103,12 @@ chunks = sr.query("who won the most seats?", session="wb_elections", k=5)
 # Build structured context for an LLM
 context = sr.build_context("who won the most seats?", session="wb_elections")
 print(context.to_prompt())
+
+# Export for downstream systems
+print(result.to_json())        # clean JSON
+print(result.to_mongodb())     # MongoDB-ready document
+print(result.to_jsonl())       # JSONL for streaming pipelines
+print(result.trace.summary())  # fetch=210ms chunk=45ms embed=380ms rerank=90ms
 ```
 
 **CLI in 30 seconds**
@@ -124,24 +136,33 @@ srag inspect --show candidates                   # see what SRag is learning
 │                      SRagOrchestrator                           │
 │                                                                 │
 │  ┌─────────────────┐    ┌──────────────────┐                    │
-│  │ TopicClassifier │    │ QueryIntelligence │                   │
-│  │ tech/finance/   │    │ context injection │                   │
-│  │ sports/news/... │    │ query expansion   │                   │
+│  │ TopicClassifier │    │ QueryIntelligence|                    │
+│  │ tech/finance/   │    │ context injection│                    │
+│  │ sports/news/... │    │ query expansion  │                    │
 │  └────────┬────────┘    └────────┬─────────┘                    │
 │           └────────────┬─────────┘                              │
 └────────────────────────┼────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│                      SearchLayer (v1.0.0)                       │
+│                                                                 │
+│  Priority 1: SearXNG  ←─── self-hosted or public instance       │
+│       ↓ fallback if unavailable                                 │
+│  Priority 2: DuckDuckGo DDGS  ←─── always available             │
+│       ↓                                                         │
+│  URL dedup + ReputationAwareSelector  →  ranked URL list        │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                   AnuInfrastructureScraper                      │
 │                                                                 │
-│  DuckDuckGo DDGS  →  ReputationAwareSelector  →  URL ranking    │
-│         ↓                                                       │
 │  httpx async (parallel fetching, retry + backoff)               │
 │         ↓                                                       │
 │  Playwright fallback  ←─── JS-heavy pages                       │
 │         ↓                                                       │
-│  trafilatura / BeautifulSoup4  ←─── content extraction          │ 
+│  trafilatura / BeautifulSoup4  ←─── content extraction          │
 │         ↓                                                       │
 │  content hash dedup  ←─── document-level deduplication          │
 └────────────────────────┬────────────────────────────────────────┘
@@ -163,8 +184,9 @@ srag inspect --show candidates                   # see what SRag is learning
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     QualityEvaluator                            │
+│                RecencyRanker + QualityEvaluator                 │
 │                                                                 │
+│  recency_score × recency_weight + coherence × (1-weight)        │
 │  pass_rate < 0.25 → quality gate rejects session                │
 │  passed_chunks < 3 → quality gate rejects session               │
 └────────────────────────┬────────────────────────────────────────┘
@@ -186,6 +208,8 @@ srag inspect --show candidates                   # see what SRag is learning
 │  CrossEncoder reranker  (ms-marco-MiniLM-L-6-v2)                │
 │         ↓                                                       │
 │  ContextBuilder  →  token-budgeted context  →  LLM prompt       │
+│         ↓                                                       │
+│  SRagResult  →  .to_prompt() / .to_json() / .to_mongodb()       │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -196,7 +220,36 @@ srag inspect --show candidates                   # see what SRag is learning
 │  LexiconStore     ←─── self-building query vocabulary           │
 │  SideChannelCollector ←─── latency, hit rate, quality signals   │
 │  AdaptiveConcurrency  ←─── dynamic parallelism tuning           │
+│  SRagTracer       ←─── per-step timing attached to results      │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Search providers — SearXNG + DDGS (v1.0.0)
+
+SRag v1.0.0 introduces a priority-based search layer. SearXNG is tried first — it aggregates Google, Bing, Brave, and 70+ engines simultaneously with no rate limits. DDGS fills the gap if SearXNG is unavailable.
+
+```python
+from srag import SRag, SRagConfig
+
+# Self-hosted SearXNG instance (recommended)
+sr = SRag(config=SRagConfig(
+    searxng_instance = "http://localhost:8080",
+    searxng_engines  = ["google", "bing", "brave", "duckduckgo"],
+))
+
+# Auto-detect public SearXNG instance + DDGS fallback
+sr = SRag(config=SRagConfig(
+    use_searxng = True,
+    use_ddgs    = True,
+))
+
+# DDGS only — original behavior
+sr = SRag(config=SRagConfig(
+    use_searxng = False,
+    use_ddgs    = True,
+))
 ```
 
 ---
@@ -225,10 +278,40 @@ sr = SRag(config=SRagConfig(
     use_reputation          = True,    # keep domain scoring
     use_quality_evaluator   = True,    # keep quality gate
     use_recency_ranking     = True,    # boost recent sources
+    use_searxng             = True,    # SearXNG primary search
     recency_weight          = 0.4,     # 40% recency, 60% coherence
     max_results             = 8,
     chunk_size              = 128,
+    trace_timing            = True,    # enable per-step timing
 ))
+```
+
+---
+
+## Typed results — `SRagResult`
+
+Every search operation returns a typed `SRagResult`:
+
+```python
+result = await sr.search("python asyncio", session="python")
+
+# Check success
+if result.success:
+    print(result.doc_count)      # documents scraped
+    print(result.chunk_count)    # chunks created
+    print(result.topic)          # detected topic
+
+# Timing trace
+print(result.trace.summary())
+# fetch=210ms chunk=45ms embed=380ms rerank=90ms docs=8 chunks=34
+
+# Output formats
+print(result.to_prompt())        # LLM-ready context string
+print(result.to_json())          # clean JSON
+print(result.to_jsonl())         # JSONL for streaming pipelines
+
+# MongoDB — drop directly into a collection
+collection.insert_one(result.to_mongodb())
 ```
 
 ---
@@ -254,15 +337,15 @@ results = await sr.sequential_search([
 
 # Verification search — conflict detection across sources
 result = await sr.verify("GST rate on laptops", session="gst_verify")
-if result["status"] == "conflict_detected":
-    print(result["conflicts"])
+if result.status == "conflict_detected":
+    print(result.conflicts)
 ```
 
 ---
 
-## Local file and database ingestion (v0.9.0)
+## Local file and database ingestion
 
-SRag can ingest local files and databases using the same pipeline as web retrieval — chunked, embedded, and indexed into a session.
+SRag ingests local files and databases using the same pipeline as web retrieval — chunked, embedded, and indexed into a session.
 
 ```python
 # Single file
@@ -277,7 +360,8 @@ sr.ingest("./docs/",          session="project_docs")
 
 # SQLite database
 sr.ingest("sqlite:///mydb.sqlite", session="db", table="articles")
-sr.ingest("sqlite:///mydb.sqlite", session="db", query="SELECT title, body FROM posts WHERE published=1")
+sr.ingest("sqlite:///mydb.sqlite", session="db",
+          query="SELECT title, body FROM posts WHERE published=1")
 
 # PostgreSQL
 sr.ingest("postgresql://user:pass@localhost/mydb", session="pg",
@@ -303,7 +387,7 @@ sr.ingest("postgresql://user:pass@localhost/mydb", session="pg",
 ```bash
 # Search
 srag search "query"                              # live web search
-srag search "query" --results 20 --debug        # more results, debug output
+srag search "query" --results 20 --debug        # more results, debug + timing
 
 # Read
 srag read <url>                                  # fetch and read any URL
@@ -360,29 +444,30 @@ The lexicon graduates terms from candidate → active after 8+ high-confidence o
 
 ---
 
-## Python API
+## Error handling
 
 ```python
-from srag import SRag, SRagConfig
+from srag import SRag, SRagSessionNotFoundError, SRagQualityError
 
 sr = SRag()
 
-# Search and build context for an LLM in one call
-await sr.search("python asyncio patterns", session="python")
-context = sr.build_context(
-    query        = "how do I cancel a task?",
-    session      = "python",
-    k            = 10,
-    token_budget = 2000,
+try:
+    chunks = sr.query("question", session="nonexistent")
+except SRagSessionNotFoundError as e:
+    print(e.message)   # "Session 'nonexistent' not found. Run `srag index` first."
+
+# All exceptions
+from srag import (
+    SRagFetchError,         # URL fetch failed
+    SRagTimeoutError,       # fetch timed out
+    SRagBlockedError,       # domain blocked request
+    SRagQualityError,       # quality gate rejected session
+    SRagNoContentError,     # no usable content found
+    SRagIndexError,         # LanceDB indexing failed
+    SRagIngestError,        # local file ingestion failed
+    SRagUnsupportedFormatError,   # unsupported file type
+    SRagMissingDependencyError,   # optional dep not installed
 )
-print(context.to_prompt())   # ready to inject into any LLM
-
-# Cache management
-if sr.is_stale("python", max_age_hours=24):
-    await sr.search("python asyncio patterns", session="python", force_new=True)
-
-print(sr.list_sessions())
-print(sr.config)             # inspect active config
 ```
 
 ---
@@ -396,8 +481,8 @@ print(sr.config)             # inspect active config
 | v0.6.0 | ✅ shipped | Playwright fallback, semantic chunking, query expansion |
 | v0.7.0 | ✅ shipped | CrossEncoder reranker, caching, domain-aware search |
 | v0.8.0 | ✅ shipped | Topic-aware lexicon, coherence scoring, `srag read`, `srag inspect`, result caching |
-| v0.9.0 | ✅ shipped | Local file ingestion (PDF/DOCX/TXT/CSV/JSON), database ingestion (SQLite/PostgreSQL), feature toggles via `SRagConfig`, recency-aware ranking |
-| v1.0.0 | 🔜 next | PyPI publish, stable public API, full documentation, production-ready |
+| v0.9.0 | ✅ shipped | Local file ingestion (PDF/DOCX/TXT/CSV/JSON), database ingestion, `SRagConfig` feature toggles, recency-aware ranking |
+| v1.0.0 | ✅ shipped | PyPI publish, SearXNG+DDGS search layer, `SRagResult` typed returns, `SRagTracer` timing, typed exceptions, stable public API |
 
 ---
 
