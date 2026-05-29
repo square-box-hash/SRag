@@ -138,6 +138,7 @@ class SRagOrchestrator:
             query_intelligence   = self.query_intelligence,
             topic_classifier     = self.topic_classifier,
             reputation_selector  = self.rep_selector,
+            search_layer         = self.search_layer,
         )
 
     # ── Core search ───────────────────────────────────────────────────────────
