@@ -10,7 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Ayushman Mukherjee", email = "" }
+    { name = "Gourav Mandi", email = "mg1139110@gmail.com" }
 ]
 keywords = [
     "rag", "retrieval", "ai", "llm", "agents",
