@@ -105,4 +105,4 @@ Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic V
 - Core pipeline — DuckDuckGo search, httpx scraping, LanceDB indexing
 - `srag` CLI with `search`, `index`, `query`, `verify`, `sessions`, `stale`
 - Session isolation — each topic gets its own LanceDB table
-- Sentence-transformers embedding (all-MiniLM-L6-v2)
+- Sentence-transformers embedding (all-MiniLM-L6-v2)# v1.1.0 Release
