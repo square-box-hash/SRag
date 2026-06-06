@@ -54,6 +54,14 @@ all = [
     "psycopg2-binary>=2.9",
 ]
 
+server = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0"
+]
+all    = [
+    "srag[docs,databases,server]"
+]
+
 [project.urls]
 Homepage   = "https://github.com/square-box-hash/SRag"
 Repository = "https://github.com/square-box-hash/SRag"

@@ -427,6 +427,9 @@ Examples:
   srag verify "GST rate India" --session gst_verify
   srag sessions
   srag stale gst --hours 48
+  srag serve
+  srag serve --port 9000
+  srag serve --reload
 """
     )
 
@@ -487,6 +490,11 @@ Examples:
     st = sub.add_parser("stale", help="Check if a session is stale")
     st.add_argument("session", type=str)
     st.add_argument("--hours", type=int, default=24)
+
+    srv = sub.add_parser("serve", help="Start SRag as an HTTP server")
+    srv.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    srv.add_argument("--port", type=int, default=8000,      help="Port to listen on (default: 8000)")
+    srv.add_argument("--reload", action="store_true",        help="Auto-reload on code changes (dev only)")
 
     args = parser.parse_args()
     _setup_logging(args.debug)
@@ -953,6 +961,12 @@ Examples:
         else:
             print(f"  ✅ '{args.session}' is fresh (within {args.hours}h)")
         print(f"  {'═' * width}\n")
+
+    elif args.command == "serve":
+        from srag.server import serve
+        print(f"\n  Starting SRag server on http://{args.host}:{args.port}")
+        print(f"  Docs available at http://localhost:{args.port}/docs\n")
+        serve(host=args.host, port=args.port, reload=args.reload)
 
 
 if __name__ == "__main__":
