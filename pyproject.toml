@@ -48,17 +48,11 @@ docs = [
 databases = [
     "psycopg2-binary>=2.9",
 ]
-all = [
-    "pymupdf>=1.24",
-    "python-docx>=1.1",
-    "psycopg2-binary>=2.9",
-]
-
 server = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0"
 ]
-all    = [
+all = [
     "srag[docs,databases,server]"
 ]
 
