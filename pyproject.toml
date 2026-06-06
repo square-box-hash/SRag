@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srag"
-version = "1.0.0"
+version = "1.1.0"
 description = "Smart RAG — the retrieval layer for local AI agents. Replaces Tavily + Firecrawl + Perplexity with a single open-source package."
 readme = "README.md"
 license = "MIT"
