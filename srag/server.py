@@ -1,12 +1,12 @@
 """
-srag/server.py — SRag FastAPI Server (v1.1.0)
+srag/server.py — SRag FastAPI Server (v1.2.0)
 
 Wraps the SRag library as a language-agnostic HTTP service.
 Any language that can make HTTP requests can now use SRag.
 
 Run:
     uvicorn srag.server:app --host 0.0.0.0 --port 8000
-    # or via CLI (v1.1.0):
+    # or via CLI (v1.2.0):
     srag serve --port 8000
 """
 
@@ -31,7 +31,7 @@ app = FastAPI(
         "Smart RAG — local retrieval as an HTTP service. "
         "Replaces Tavily, Firecrawl, and Perplexity with a single open-source pipeline."
     ),
-    version="1.1.0",
+    version="1.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -212,14 +212,14 @@ def _build_prompt_string(question: str, chunks: list[dict]) -> str:
 @app.get("/health", tags=["System"])
 async def health():
     """Liveness check."""
-    return {"status": "ok", "version": "1.1.0", "service": "srag"}
+    return {"status": "ok", "version": "1.2.0", "service": "srag"}
 
 
 @app.get("/", tags=["System"])
 async def root():
     return {
         "service": "SRag API",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "docs": "/docs",
         "mcp": {
             "available": _mcp_available,
@@ -227,6 +227,8 @@ async def root():
             "install": "pip install fastapi-mcp" if not _mcp_available else None,
         },
         "endpoints": {
+            "read"               "POST /read"
+            "inspect"            "GET  /inspect",
             "search":            "POST /search",
             "parallel_search":   "POST /search/parallel",
             "sequential_search": "POST /search/sequential",
@@ -502,6 +504,87 @@ async def delete_session(name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ---------------------------------------------------------------------------
+# Inspect endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/inspect", tags=["System"])
+async def inspect(
+    show:    str           = Query("all", description="What to show: all | reputation | lexicon | candidates | chunks | domain-filters"),
+    session: str | None    = Query(None,  description="Session name — required for show=chunks"),
+    domain:  str | None    = Query(None,  description="Filter reputation by domain substring"),
+    topic:   str | None    = Query(None,  description="Filter reputation/lexicon by topic"),
+):
+    """
+    System introspection — exposes the same data as `srag inspect` over HTTP.
+    Returns reputation scores, lexicon state, chunk stats, and domain filter flags as JSON.
+    """
+    sr = get_srag()
+    try:
+        from srag.inspector import inspect as srag_inspect
+        db   = sr._orchestrator.indexer.db
+        data = srag_inspect(db=db, show=show, session=session, domain=domain, topic=topic)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Read endpoint
+# ---------------------------------------------------------------------------
+
+class ReadRequest(BaseModel):
+    url: str = Field(..., description="URL to fetch, distill, and return as clean text")
+
+
+@app.post("/read", tags=["Retrieval"])
+async def read_url(req: ReadRequest):
+    """
+    Fetch a URL and return distilled clean text — without indexing it.
+    HTTP equivalent of `srag read <url>`.
+    """
+    sr = get_srag()
+    try:
+        import httpx
+        from srag.dom_distiller import DOMDistiller
+        from srag.scraper import REALISTIC_HEADERS
+        import random
+
+        domain_filters = getattr(sr._orchestrator, "domain_filters", None)
+        distiller      = DOMDistiller(domain_filters=domain_filters)
+
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(req.url, headers=random.choice(REALISTIC_HEADERS))
+            resp.raise_for_status()
+            html = resp.text
+
+        distilled = distiller.distill(html, req.url)
+
+        import trafilatura
+        text = trafilatura.extract(
+            distilled["html"],
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False,
+            favor_recall=True,
+        ) or ""
+
+        from bs4 import BeautifulSoup
+        soup  = BeautifulSoup(distilled["html"], "html.parser")
+        title = (soup.title.string.strip() if soup.title and soup.title.string else req.url)
+
+        return {
+            "url":            req.url,
+            "title":          title,
+            "content":        text,
+            "content_length": len(text),
+            "noise_removed":  distilled["removed"],
+        }
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
 # Config helper

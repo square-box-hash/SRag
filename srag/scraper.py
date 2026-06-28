@@ -8,11 +8,13 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
+from sympy import re
 import trafilatura
 from playwright.async_api import async_playwright
 
 from srag.collector import SideChannelCollector
 from srag.adaptive_concurrency import ConcurrencyController, ManagedSlot
+from srag.dom_distiller import DOMDistiller, LIVE_DISTILL_JS
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +232,8 @@ class AnuInfrastructureScraper:
         topic_classifier=None,  # TopicClassifier | None
         reputation_selector=None, # ReputationAwareSelector | None
         search_layer=None, # SearchLayer | None
+        domain_filters=None,
+        use_dom_distiller: bool = True
     ):
         self.max_results = max_results
         self.timeout = timeout
@@ -244,6 +248,7 @@ class AnuInfrastructureScraper:
         self.topic_classifier = topic_classifier
         self.reputation_selector = reputation_selector
         self.search_layer = search_layer
+        self.distiller = DOMDistiller(domain_filters=domain_filters) if use_dom_distiller else None
 
         if extract_mode not in ["basic", "trafilatura"]:
             raise ValueError("extract_mode must be 'basic' or 'trafilatura'")
@@ -583,8 +588,33 @@ class AnuInfrastructureScraper:
                         wait_until="domcontentloaded",
                     )
                     await page.wait_for_timeout(1500)
+                    pruned_body_html = None
+                    if self.distiller is not None:
+                        try:
+                            pruned_body_html = await page.evaluate(LIVE_DISTILL_JS)
+                        except Exception:
+                            logger.debug(
+                                "Live DOM distillation failed [%s] — falling back to static pass",
+                                url,
+                            )
                     html = await page.content()
                     await browser.close()
+
+            if self.distiller is not None:
+                try:
+                    if pruned_body_html:
+                        import re as _re
+                        head_match = _re.search(
+                            r"<head[^>]*>.*?</head>", html, re.IGNORECASE | re.DOTALL
+                        )
+                        head_html = head_match.group(0) if head_match else "<head></head>"
+                        html = f"<html>{head_html}<body>{pruned_body_html}</body></html>"
+                    distilled = self.distiller.distill(html, url)
+                    html = distilled["html"]
+                except Exception:
+                    logger.exception(
+                        "DOM distillation failed [%s] — continuing with raw HTML", url
+                    )
 
             soup = BeautifulSoup(html, "html.parser")
             clean_text = trafilatura.extract(
@@ -661,6 +691,15 @@ class AnuInfrastructureScraper:
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         html = resp.text
+
+        if self.distiller is not None:
+            try:
+                distilled = self.distiller.distill(html, url)
+                html = distilled["html"]
+            except Exception:
+                logger.exception(
+                    "DOM distillation failed [%s] — continuing with raw HTML", url
+                )
 
         try:
             soup = BeautifulSoup(html, "html.parser")

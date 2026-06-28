@@ -477,7 +477,7 @@ Examples:
     ins.add_argument("--domain",    type=str,            default=None)
     ins.add_argument("--topic",     type=str,            default=None)
     ins.add_argument("--show",      type=str,            default="all",
-                    choices=["all", "reputation", "lexicon", "chunks", "collector","candidates"])
+                    choices=["all", "reputation", "lexicon", "chunks", "collector","candidates", "domain-filters"],)
     ins.add_argument("--verbose", "-v", action="store_true", default=False,
                  help="Show all fields for matched domains")
 
@@ -778,162 +778,107 @@ Examples:
 
     elif args.command == "inspect":
         from srag import SRag
-        import lancedb
+        from srag.inspector import inspect as srag_inspect
 
         sr    = SRag()
         db    = sr._orchestrator.indexer.db
         width = 60
 
+        data = srag_inspect(
+            db      = db,
+            show    = args.show,
+            session = args.session,
+            domain  = args.domain,
+            topic   = args.topic,
+        )
+
         print(f"\n  {'═' * width}")
         print(f"  SRag Inspector")
         print(f"  {'═' * width}")
 
-        # ── Reputation table ──────────────────────────────────────────────────
-        if args.show in ("all", "reputation"):
+        # ── Reputation ────────────────────────────────────────────────────────
+        if "reputation" in data:
             print(f"\n  DOMAIN REPUTATION")
             print(f"  {'─' * width}")
-            
-            if "domain_reputation" not in db.table_names():
+            rep = data["reputation"]
+            if not rep["available"]:
                 print("  No reputation data yet — run some searches first.")
             else:
-                table = db.open_table("domain_reputation")
-                rows  = table.to_pandas().to_dict(orient="records")
-                
-                # Filter by domain or topic if specified
-                if args.domain:
-                    rows = [r for r in rows if args.domain in r.get("domain", "")]
-                if args.topic:
-                    rows = [r for r in rows if r.get("topic") == args.topic]
-                    
-                rows = sorted(rows, key=lambda r: r.get("retrieval_confidence", 0), reverse=True)
-                
+                rows = rep["rows"]
                 if not rows:
                     print("  No matching records.")
-                    
                 else:
                     print(f"  {'Domain':<28} {'Topic':<12} {'Conf':>5}  {'Quality':>7}  {'Hit%':>5}  {'Scrapes':>7}")
                     print(f"  {'─'*28} {'─'*12} {'─'*5}  {'─'*7}  {'─'*5}  {'─'*7}")
-                    
                     for r in rows[:20]:
-                        domain   = r.get("domain", "")[:26]
-                        topic    = r.get("topic", "")[:10]
-                        conf     = float(r.get("retrieval_confidence", 0))
-                        quality  = float(r.get("avg_chunk_quality", 0))
-                        hit_rate = float(r.get("useful_hit_rate", 0))
-                        scrapes  = int(r.get("total_scrapes", 0))
-                        
-                        if conf >= 0.75:
-                            indicator = "🟢"
-                        elif conf >= 0.55:
-                            indicator = "🟡"
-                        else:
-                            indicator = "🔴"
-                            
-                        print(f"  {indicator} {domain:<26} {topic:<12} {conf:>5.2f}  {quality:>7.2f}  {hit_rate:>5.0%}  {scrapes:>7}")
-                        
+                        conf = r["retrieval_confidence"]
+                        indicator = "🟢" if conf >= 0.75 else "🟡" if conf >= 0.55 else "🔴"
+                        print(
+                            f"  {indicator} {r['domain'][:26]:<26} {r['topic'][:10]:<12} "
+                            f"{conf:>5.2f}  {r['avg_chunk_quality']:>7.2f}  "
+                            f"{r['useful_hit_rate']:>5.0%}  {r['total_scrapes']:>7}"
+                        )
                     if len(rows) > 20:
                         print(f"\n  [{len(rows) - 20} more domains not shown — use --domain to filter]")
-
                     if args.verbose and rows:
-                        print(f"\n  {r.get('domain')} / {r.get('topic')}")
+                        r = rows[0]
+                        print(f"\n  {r['domain']} / {r['topic']}")
                         print(f"  {'─' * 40}")
-                        print(f"  retrieval_confidence : {r.get('retrieval_confidence', 0):.4f}")
-                        print(f"  avg_chunk_quality    : {r.get('avg_chunk_quality', 0):.4f}")
-                        print(f"  useful_hit_rate      : {r.get('useful_hit_rate', 0):.4f}")
-                        print(f"  irrelevance_rate     : {r.get('irrelevance_rate', 0):.4f}")
-                        print(f"  failure_rate         : {r.get('failure_rate', 0):.4f}")
-                        print(f"  avg_latency          : {r.get('avg_latency', 0):.3f}s")
-                        print(f"  total_scrapes        : {r.get('total_scrapes', 0)}")
-                        print(f"  last_updated         : {r.get('last_updated', '')[:19]}")
+                        for key in ("retrieval_confidence","avg_chunk_quality","useful_hit_rate",
+                                    "irrelevance_rate","failure_rate","avg_latency","total_scrapes","last_updated"):
+                            print(f"  {key:<24}: {r[key]}")
 
-
-        # ── Lexicon table ─────────────────────────────────────────────────────
-        if args.show in ("all", "lexicon","candidates"):
+        # ── Lexicon ───────────────────────────────────────────────────────────
+        if "lexicon" in data:
             print(f"\n  LEXICON")
             print(f"  {'─' * width}")
-            
-            if "lexicon" not in db.table_names():
+            lex = data["lexicon"]
+            if not lex["available"]:
                 print("  No lexicon data yet — run some searches first.")
             else:
-                table = db.open_table("lexicon")
-                rows  = table.to_pandas().to_dict(orient="records")
-                
-                if args.topic:
-                    rows = [r for r in rows if r.get("topic") == args.topic]
-                    
-                active = [r for r in rows if r.get("status") == "active"]
-                candidates = [r for r in rows if r.get("status") == "candidate"]
-                suppressed = [r for r in rows if r.get("status") == "suppressed"]
-                
+                active, candidates, suppressed = lex["active"], lex["candidates"], lex["suppressed"]
                 print(f"  Active: {len(active)}  Candidate: {len(candidates)}  Suppressed: {len(suppressed)}")
                 print()
-
                 if active:
                     print(f"  {'Term':<24} {'Topic':<12} {'Obs':>5}  {'AvgConf':>7}  {'Status':<10}")
                     print(f"  {'─'*24} {'─'*12} {'─'*5}  {'─'*7}  {'─'*10}")
-                    for r in sorted(active, key=lambda x: x.get("avg_confidence", 0), reverse=True)[:15]:
-                        print(
-                            f"  {'✅'} {r.get('term',''):<22} {r.get('topic',''):<12} "
-                            f"{r.get('observations',0):>5}  {r.get('avg_confidence',0):>7.3f}  "
-                            f"{r.get('status',''):<10}"
-                        )
-
+                    for r in sorted(active, key=lambda x: x["avg_confidence"], reverse=True)[:15]:
+                        print(f"  ✅ {r['term']:<22} {r['topic']:<12} {r['observations']:>5}  {r['avg_confidence']:>7.3f}  {r['status']:<10}")
                 else:
-                    print("No active terms yet — terms need 8+ high-confidence observations to graduate.")
-
+                    print("  No active terms yet — terms need 8+ high-confidence observations to graduate.")
                 if args.show in ("candidates", "all") or not active:
                     if candidates:
                         print(f"\n  {'Term':<24} {'Topic':<12} {'Obs':>5}  {'AvgConf':>7}")
                         print(f"  {'─'*24} {'─'*12} {'─'*5}  {'─'*7}")
-                        for r in sorted(candidates, key=lambda x: x.get("observations", 0), reverse=True)[:20]:
-                            print(
-                                f"  {'🔵'} {r.get('term',''):<22} {r.get('topic',''):<12} "
-                                f"{r.get('observations',0):>5}  {r.get('avg_confidence',0):>7.3f}"
-                            )
+                        for r in sorted(candidates, key=lambda x: x["observations"], reverse=True)[:20]:
+                            print(f"  🔵 {r['term']:<22} {r['topic']:<12} {r['observations']:>5}  {r['avg_confidence']:>7.3f}")
                     else:
                         print("  No candidates yet.")
 
-
-        # --─ Chunks and collector tables could be added here similarly if needed
-        if args.show in ("all", "chunks") and args.session:
+        # ── Chunks ────────────────────────────────────────────────────────────
+        if "chunks" in data:
             print(f"\n  CHUNKS IN SESSION '{args.session}'")
             print(f"  {'─' * width}")
-            
-            if "chunks" not in db.table_names():
+            ch = data["chunks"]
+            if not ch["available"]:
                 print(f"  Session '{args.session}' not found or no chunks indexed yet.")
             else:
-                table = db.open_table("chunks")
-                rows  = table.to_pandas().to_dict(orient="records")
-                session_chunks = [r for r in rows if r.get("session") == args.session]
-                
-                #Group by domains
-                by_domain: dict[str, list] = {}
-                for r in rows:
-                    from urllib.parse import urlparse
-                    domain = urlparse(r.get("url", "")).netloc.replace("www.", "")
-                    by_domain.setdefault(domain, []).append(r)
-
-                print(f"  Total chunks: {len(rows)}  Domains: {len(by_domain)}")
+                print(f"  Total chunks: {ch['total_chunks']}  Domains: {ch['total_domains']}")
                 print()
                 print(f"  {'Domain':<28} {'Chunks':>6}  {'AvgCoherence':>12}")
                 print(f"  {'─'*28} {'─'*6}  {'─'*12}")
-
-                for domain, chunks in sorted(by_domain.items(), key=lambda x: len(x[1]), reverse=True):
-                    avg_coh = sum(float(c.get("coherence_score", 0)) for c in chunks) / len(chunks)
-                    print(f"  {domain:<28} {len(chunks):>6}  {avg_coh:>12.3f}")
-
-                # If query provided, show top matching chunks
+                for domain, stats in sorted(ch["by_domain"].items(), key=lambda x: x[1]["chunks"], reverse=True):
+                    print(f"  {domain:<28} {stats['chunks']:>6}  {stats['avg_coherence']:>12.3f}")
                 if args.query:
                     print(f"\n  TOP CHUNKS FOR '{args.query}'")
                     print(f"  {'─' * width}")
                     results = sr.query(args.query, session=args.session, k=5)
                     for i, r in enumerate(results, 1):
-                        url     = r.get("url", r.get("source", ""))[:50]
+                        from urllib.parse import urlparse
                         domain  = urlparse(r.get("url", r.get("source", ""))).netloc.replace("www.", "")
                         coh     = r.get("score", 0)
                         content = r.get("content", "").strip()
                         fmt     = _detect_format(content)
-
                         print(f"  [{i}] {domain:<28} (coherence={coh:.3f})")
                         print(f"  {'─' * width}")
                         if fmt == "table":
@@ -945,6 +890,35 @@ Examples:
                             print(f"  {rendered}")
                             if remaining > 0:
                                 print(f"\n  [{remaining} more paragraph{'s' if remaining > 1 else ''} not shown]")
+
+        # ── Domain filters ────────────────────────────────────────────────────
+        if "domain_filters" in data:
+            print(f"\n  DOMAIN FILTERS")
+            print(f"  {'─' * width}")
+            df = data["domain_filters"]
+            if not df["available"]:
+                print("  No domain filter data yet.")
+            else:
+                rows = df["rows"]
+                if not rows:
+                    print("  No domain filter records.")
+                else:
+                    flagged   = [r for r in rows if r["flagged"]]
+                    manual    = [r for r in rows if r["source"] == "manual"]
+                    print(f"  Total: {len(rows)}  Flagged: {len(flagged)}  Manual rules: {len(manual)}")
+                    print()
+                    print(f"  {'Domain':<28} {'Streak':>6}  {'Scrapes':>7}  {'Selectors':>9}  {'Status':<10}")
+                    print(f"  {'─'*28} {'─'*6}  {'─'*7}  {'─'*9}  {'─'*10}")
+                    for r in rows[:20]:
+                        indicator = "🔴" if r["flagged"] else "🟢"
+                        status    = "FLAGGED" if r["flagged"] else "ok"
+                        print(
+                            f"  {indicator} {r['domain'][:26]:<26} {r['low_coherence_streak']:>6}  "
+                            f"{r['total_scrapes']:>7}  {len(r['selectors']):>9}  {status:<10}"
+                        )
+                        if args.verbose and r["selectors"]:
+                            for sel in r["selectors"]:
+                                print(f"       {sel}")
 
         print(f"\n  {'═' * width}\n")
 

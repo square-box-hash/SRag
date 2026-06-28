@@ -11,6 +11,7 @@ class SRagConfig:
     use_quality_evaluator:     bool = True
     use_query_intelligence:    bool = True
     use_dedup:                 bool = True
+    use_dom_distiller:         bool = True
 
     # ── Search provider settings ──────────────────────────────
     use_searxng:           bool      = True

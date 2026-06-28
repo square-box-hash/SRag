@@ -30,6 +30,7 @@ from srag.result import SRagResult, SRagTrace
 from srag.tracer import SRagTracer
 from srag.recency import RecencyRanker
 from srag.search_providers import SearchLayer, SearXNGProvider
+from srag.domain_filters import DomainFilterStore
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
@@ -99,6 +100,9 @@ class SRagOrchestrator:
             ReputationStore(db=_db, lexicon=self.lexicon)
             if cfg.use_reputation else None
         )
+        self.domain_filters = (
+            DomainFilterStore(db=_db) if cfg.use_dom_distiller else None
+        )
         self.topic_classifier   = TopicClassifier()
         self.query_intelligence = (
             QueryIntelligence(lexicon=self.lexicon)
@@ -110,6 +114,14 @@ class SRagOrchestrator:
                 priority_domains = PRIORITY_DOMAINS,
                 blocked_domains  = BLOCKED_DOMAINS,
             ) if cfg.use_reputation else None
+        )
+
+        self.search_layer = SearchLayer(
+            searxng_instance = cfg.searxng_instance,
+            searxng_engines  = cfg.searxng_engines,
+            use_searxng      = cfg.use_searxng,
+            use_ddgs         = cfg.use_ddgs,
+            max_results      = cfg.max_results,
         )
 
         # ── Conditional adaptive concurrency ──────────────────────────────────
@@ -124,10 +136,12 @@ class SRagOrchestrator:
 
         # ── Semaphore + stored config values ──────────────────────────────────
         self.semaphore    = asyncio.Semaphore(cfg.max_concurrent)
+        self.max_concurrent = cfg.max_concurrent
         self.max_results  = cfg.max_results
         self.max_chars    = cfg.max_chars
         self.extract_mode = cfg.extract_mode
         self.rerank_top_k = cfg.rerank_top_k
+        self.use_dom_distiller = cfg.use_dom_distiller
 
     def _make_scraper(self) -> AnuInfrastructureScraper:
         return AnuInfrastructureScraper(
@@ -139,6 +153,8 @@ class SRagOrchestrator:
             topic_classifier     = self.topic_classifier,
             reputation_selector  = self.rep_selector,
             search_layer         = self.search_layer,
+            domain_filters       = self.domain_filters,
+            use_dom_distiller    = self.use_dom_distiller
         )
 
     # ── Core search ───────────────────────────────────────────────────────────
@@ -394,6 +410,8 @@ class SRagOrchestrator:
 
         # Reputation signals for context scoring
         reputation = {}
+        
+        
         for chunk in chunks:
             domain = self._get_domain(chunk.get("source", ""))
             if domain not in reputation:
@@ -436,6 +454,10 @@ class SRagOrchestrator:
                 )
 
                 # Cold start cap — prevent early overconfidence
+                if self.domain_filters is not None:
+                    self.domain_filters.record.coherence(
+                        domain, signals["avg_chunk_quality"]
+                    )
                 record = self.reputation.get(domain, topic)
                 if record:
                     scrapes = int(record.get("total_scrapes", 0))
