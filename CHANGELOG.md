@@ -3,6 +3,20 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] — 2026-07-05
+
+### Fixed
+- `from sympy import re` in `scraper.py` was shadowing the standard library
+  `re` module, causing `AttributeError` on every Playwright fallback fetch
+- `srag read` now falls back to Playwright if httpx gets a 403 — same
+  behaviour as the main search pipeline
+- `seen_sentences` dedup set in `SmartChunker` was reset per document —
+  moved to `chunk_docs()` scope so duplicate content across documents
+  (JS-rendered pages with duplicated DOM blocks) gets caught correctly
+- `srag read` no longer instantiates `SmartChunker` and `SentenceTransformer`
+  unnecessarily — raw doc content is rendered directly, eliminating the
+  overlap-sentence duplication artifact in terminal output
+
 ---
 ## [1.2.0] — 2026-06-28
 

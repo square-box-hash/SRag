@@ -660,8 +660,6 @@ Examples:
                 url = args.url
 
             scraper = AnuInfrastructureScraper(max_results=1)
-            _model  = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            chunker = SmartChunker(model=_model, max_tokens=256)
             width   = args.width
 
             print(f"\n  Fetching {url}...\n")
@@ -697,16 +695,12 @@ Examples:
                     follow_redirects = True,
                 ) as client:
                     doc = await scraper._fetch_and_clean(client, url, "Article")
+                    if doc is None:
+                        doc = await scraper._playwright_fetch(url, "Article")
             if not doc:
                 print("  ❌ Failed to fetch or extract content.")
                 return
-            chunks = chunker.chunk(
-                text       = doc.get("content", ""),
-                source_url = url,
-                title      = doc.get("title", ""),
-            )
-
-            if not chunks:
+            if not doc.get("content", "").strip():
                 print("  ❌ No readable content found.")
                 return
 
@@ -732,43 +726,25 @@ Examples:
             print(f"  {' • '.join(meta_parts)}")
             print(f"  {'═' * width}\n")
 
-            if args.raw:
-                # Raw mode — just print full text
-                print(textwrap.fill(doc.get("content", ""), width=width))
+            content = doc.get("content", "").strip()
+            fmt     = _detect_format(content)
+
+            if fmt == "table":
+                print(_render_table(content))
             else:
-                # Render chunks with format detection
                 seen = set()
-                for chunk in chunks:
-                    content = chunk.get("content", "").strip()
-                    coherence = chunk.get("coherence_score", 0)
-
-                    if coherence < 0.25: 
+                paragraphs = [p.strip() for p in content.split("\n\n") if len(p.strip()) > 40]
+                if not paragraphs:
+                    paragraphs = [content]
+                for p in paragraphs:
+                    p = " ".join(p.split())
+                    if p in seen:
                         continue
-
-                    fmt = _detect_format(content)
-
-                    if fmt == "table":
-                        print(_render_table(content))
-                    elif fmt in ("garbage", "nav"):
-                        continue
-                    else:
-                        paragraphs = [
-                            p.strip() for p in content.split("\n\n")
-                            if len(p.strip()) > 40
-                        ]
-                        # Fallback: if no paragraphs found after split, treat whole chunk as one
-                        if not paragraphs and len(content.strip()) > 40:
-                            paragraphs = [content.strip()]
-                        for p in paragraphs:
-                            # Normalize whitespace (handles articles with \r\n or collapsed lines)
-                            p = " ".join(p.split())
-                            if p in seen:
-                                continue
-                            seen.add(p)
-                            wrapped = textwrap.fill(p, width=width)
-                            for line in wrapped.splitlines():
-                                print(f"  {line}")
-                            print()
+                    seen.add(p)
+                    wrapped = textwrap.fill(p, width=width)
+                    for line in wrapped.splitlines():
+                        print(f"  {line}")
+                    print()
 
             print(f"  {'─' * width}")
             print(f"  {url}")

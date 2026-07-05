@@ -137,6 +137,7 @@ class SmartChunker:
         text: str,
         source_url: str = "",
         title: str = "",
+        seen_sentences: set = None,
     ) -> List[dict]:
         """
         Chunk a single document into semantically meaningful pieces.
@@ -184,7 +185,8 @@ class SmartChunker:
         current_sentences = []
         current_tokens = 0
         chunk_index = 0
-        seen_sentences: set = set()
+        if seen_sentences is None:
+            seen_sentences = set()
 
         for i, sentence in enumerate(sentences):
             # ── Skip already-seen sentences ──────────────────
@@ -239,11 +241,13 @@ class SmartChunker:
         Replaces each doc with N semantically clean chunk dicts.
         """
         all_chunks = []
+        seen_sentences: set = set()
         for doc in docs:
             chunks = self.chunk(
                 text=doc.get("content", ""),
                 source_url=doc.get("source", ""),
                 title=doc.get("title", ""),
+                seen_sentences=seen_sentences,
             )
             # Inherit parent metadata
             for chunk in chunks:

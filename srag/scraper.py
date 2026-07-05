@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
-from sympy import re
+import re
 import trafilatura
 from playwright.async_api import async_playwright
 
