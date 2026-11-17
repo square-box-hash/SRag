@@ -29,6 +29,12 @@ class SRagConfig:
     dedupe_threshold:  float = 0.85
     db_path:           str   = "./srag_db"
 
+    # ── Embedding settings ───────────────────────────────────
+    embedding_provider:  str = "local"   # "local" (no key, offline) | "google"
+    embedding_model:     str = ""        # empty = provider default
+    embedding_dimension: int = 0         # 0 = infer from the model
+    google_api_key:      str = ""        # empty = GOOGLE_API_KEY / GEMINI_API_KEY
+
     # ── Recency settings ──────────────────────────────────────
     use_recency_ranking:  bool  = True
     recency_weight:       float = 0.4   # 0.0 = pure coherence, 1.0 = pure recency
