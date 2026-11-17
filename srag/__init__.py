@@ -7,6 +7,14 @@ load_dotenv()
 from srag.orchestrator import SRagOrchestrator
 from srag.scraper import AnuInfrastructureScraper
 from srag.indexer import SRagIndexer
+from srag.embeddings import (
+    Embedder,
+    EmbeddingMismatchError,
+    EmbeddingSpec,
+    GoogleEmbedder,
+    LocalEmbedder,
+    build_embedder,
+)
 from srag.config import SRagConfig
 from srag.ingestor import DocumentIngestor
 from srag.result import SRagResult, SRagTrace

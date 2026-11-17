@@ -78,7 +78,7 @@ class SRagOrchestrator:
         _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
         # ── Core components ───────────────────────────────────────────────────
-        self.indexer  = SRagIndexer(db_path=cfg.db_path, model=_model)
+        self.indexer  = SRagIndexer(db_path=cfg.db_path, model=_model, config=cfg)
         self.chunker  = SmartChunker(
             model            = _model,
             max_tokens       = cfg.chunk_size,
