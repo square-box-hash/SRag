@@ -3,6 +3,19 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] — 2026-11-18
+
+### Fixed
+- `SRag.search()` returned a raw `dict`, so every documented example —
+  `result.success`, `result.chunks`, `result.trace.summary()`, `result.to_json()`
+  — raised `AttributeError: 'dict' object has no attribute 'success'`. It now
+  returns the `SRagResult` the README promises, with `sources` derived from the
+  fetched documents. `verify()`, `parallel_search()` and `sequential_search()` are
+  wrapped the same way.
+- DuckDuckGo search returned nothing: the `duckduckgo_search` package was renamed
+  to `ddgs`, and the old one is a dead shim. The provider now imports `ddgs`
+  first, falling back to the old name, and the dependency is `ddgs>=9.0`.
+
 ## [1.3.3] — 2026-11-18
 
 ### Fixed

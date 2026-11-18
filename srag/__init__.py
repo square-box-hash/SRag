@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.3"
+__version__ = "1.3.4"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -114,6 +114,29 @@ class SRag:
 
     # ── Search modes ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _to_result(payload, mode: str = "simple") -> SRagResult:
+        """The orchestrator returns plain dicts; the public API promises SRagResult."""
+        if isinstance(payload, SRagResult):
+            return payload
+        if not isinstance(payload, dict):
+            return SRagResult(success=False, mode=mode, error=str(payload))
+
+        allowed = set(SRagResult.__dataclass_fields__)
+        kwargs = {k: v for k, v in payload.items() if k in allowed}
+        kwargs.setdefault("mode", mode)
+
+        if not kwargs.get("sources"):
+            seen, sources = set(), []
+            for doc in kwargs.get("docs") or []:
+                url = doc.get("url") or doc.get("source")
+                if url and url not in seen:
+                    seen.add(url)
+                    sources.append({"url": url, "title": doc.get("title", "")})
+            kwargs["sources"] = sources
+
+        return SRagResult(**kwargs)
+
     async def search(
         self,
         query:       str,
@@ -122,19 +145,22 @@ class SRag:
         max_results: Optional[int] = None,
         debug:       bool          = False,
     ) -> SRagResult:
-        return await self._orchestrator.search(
+        payload = await self._orchestrator.search(
             query       = query,
             session     = session,
             force_new   = force_new,
             max_results = max_results,
             debug       = debug,
         )
+        return self._to_result(payload)
 
     async def parallel_search(self, plan: list, debug: bool = False) -> list:
-        return await self._orchestrator.parallel_search(plan, debug=debug)
+        results = await self._orchestrator.parallel_search(plan, debug=debug)
+        return [self._to_result(item, mode="parallel") for item in results]
 
     async def sequential_search(self, steps: list, debug: bool = False) -> list:
-        return await self._orchestrator.sequential_search(steps, debug=debug)
+        results = await self._orchestrator.sequential_search(steps, debug=debug)
+        return [self._to_result(item, mode="sequential") for item in results]
 
     async def verify(
         self,
@@ -142,7 +168,8 @@ class SRag:
         session: str,
         debug:   bool = False,
     ) -> SRagResult:
-        return await self._orchestrator.verify(query, session, debug=debug)
+        payload = await self._orchestrator.verify(query, session, debug=debug)
+        return self._to_result(payload, mode="verify")
 
     # ── Local file + DB ingestion ─────────────────────────────────────────────
 
