@@ -185,6 +185,7 @@ class SRagOrchestrator:
         force_new:   bool         = False,
         max_results: Optional[int] = None,
         debug:       bool         = False,
+        check_conflicts: bool     = False,
     ) -> dict:
         async with self.semaphore:
             scraper    = self._make_scraper()
@@ -268,6 +269,11 @@ class SRagOrchestrator:
                 session, len(docs), len(chunks), indexed_count,
             )
 
+            # ── Cross-source consistency ─────────────────────────────────────
+            # Runs on documents already fetched, so search can report a conflict
+            # instead of verify() paying for a second search to find the same one.
+            conflicts = self._detect_conflicts(docs) if check_conflicts else []
+
             # ── Update reputation ─────────────────────────────────────────────
             self._update_reputation(collector, topic, query, debug=debug)
 
@@ -281,6 +287,7 @@ class SRagOrchestrator:
                 "success":       True,
                 "docs":          docs,
                 "chunks":        chunks,
+                "conflicts":     conflicts,
                 "trace":         SRagTrace(
                     fetch_ms    = fetch_ms,
                     chunk_ms    = chunk_ms,
@@ -386,12 +393,12 @@ class SRagOrchestrator:
 
     async def verify(self, query: str, session: str, debug: bool = False) -> dict:
         logger.info("Verification search: %s", query)
-        result = await self.search(query, session, force_new=True, debug=debug)
+        result = await self.search(query, session, force_new=True, debug=debug, check_conflicts=True)
 
         if not result["success"]:
             return result
 
-        conflicts = self._detect_conflicts(result["docs"])
+        conflicts = result.get("conflicts") or []
 
         if conflicts:
             logger.warning("Conflict detected in '%s'", session)

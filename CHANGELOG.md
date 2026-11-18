@@ -3,6 +3,25 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.8] — 2026-11-18
+
+### Fixed
+- **Dates were fabricated.** `_extract_date()` returns `None` when a page has no
+  date metadata, and both call sites fell back to `datetime.utcnow()`. Every
+  undated page was therefore stored as published *today*, which silently disabled
+  recency ranking (`recency_weight=0.4`) and displayed a false date in the CLI.
+  `timestamp` is now the published date or an empty string, and the fetch time is
+  kept separately as `fetched_at`. `recency_score()` already treats an empty
+  timestamp as neutral (0.5), so ranking is honest again.
+- `srag read` imported `SentenceTransformer` and `SmartChunker` without ever using
+  them, so the command died with ImportError on a torch-free install.
+
+### Added
+- `search(..., check_conflicts=True)` reports sources that disagree. Detection now
+  runs on documents that were already fetched, so `verify()` no longer pays for a
+  second search to reach the same conclusion. `SRagResult.conflicts` carries the
+  list, and `srag index --check-conflicts` prints it.
+
 ## [1.3.7] — 2026-11-18
 
 ### Fixed
