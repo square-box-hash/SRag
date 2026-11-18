@@ -316,26 +316,37 @@ def _print_query_results(
         print(f"\n  {'─' * width}\n")
 
 
+def _get(result, key, default=None):
+    """Read a field from either an SRagResult or the raw orchestrator dict."""
+    if isinstance(result, dict):
+        return _get(result, key, default)
+    value = getattr(result, key, default)
+    if value is default:
+        raw = getattr(result, "raw", None) or {}
+        if isinstance(raw, dict):
+            return raw.get(key, default)
+    return value
+
 def _print_index_result(result: dict, session: str, debug: bool = False) -> None:
     """Clean structured output for srag index."""
     width = 52
     print(f"\n  {'═' * width}")
 
-    if result["success"]:
+    if _get(result, "success", False):
         print(f"  ✅ Indexed into '{session}'")
         print(f"  {'─' * width}")
-        print(f"  {'Documents scraped':<28} {result.get('doc_count', 0):>6}")
-        print(f"  {'Chunks created':<28} {result.get('chunk_count', 0):>6}")
-        print(f"  {'Chunks indexed':<28} {result.get('indexed_count', 0):>6}")
-        print(f"  {'Topic detected':<28} {result.get('topic', '?'):>6}")
+        print(f"  {'Documents scraped':<28} {_get(result, 'doc_count', 0):>6}")
+        print(f"  {'Chunks created':<28} {_get(result, 'chunk_count', 0):>6}")
+        print(f"  {'Chunks indexed':<28} {_get(result, 'indexed_count', 0):>6}")
+        print(f"  {'Topic detected':<28} {_get(result, 'topic', '?'):>6}")
     else:
-        reason = result.get("reason", "unknown")
+        reason = _get(result, "reason", "unknown")
         print(f"  ❌ Indexing failed — {reason}")
         print(f"  {'─' * width}")
-        print(f"  {'Documents found':<28} {result.get('doc_count', 0):>6}")
+        print(f"  {'Documents found':<28} {_get(result, 'doc_count', 0):>6}")
 
-    if debug and "debug" in result:
-        d = result["debug"]
+    if debug and _get(result, "debug"):
+        d = _get(result, "debug")
         print(f"  {'─' * width}")
         print(f"  [debug] quality:     {d['quality']}")
         print(f"  [debug] concurrency: global={d['concurrency']['global_concurrency']} p95={d['concurrency']['p95_latency']}s")
@@ -350,8 +361,8 @@ def _print_verify_result(result: dict, session: str) -> None:
     width = 52
     print(f"\n  {'═' * width}")
 
-    if result.get("status") == "conflict_detected":
-        conflicts = result.get("conflicts", [])
+    if _get(result, "status") == "conflict_detected":
+        conflicts = _get(result, "conflicts", [])
         print(f"  ⚠️  {len(conflicts)} conflict{'s' if len(conflicts) != 1 else ''} detected in '{session}'")
         print(f"  {'─' * width}")
         for i, c in enumerate(conflicts[:5], 1):  # show max 5
@@ -371,7 +382,7 @@ def _print_verify_result(result: dict, session: str) -> None:
     else:
         print(f"  ✅ No conflicts in '{session}'")
         print(f"  {'─' * width}")
-        print(f"  {'Documents indexed':<28} {result.get('doc_count', 0):>6}")
+        print(f"  {'Documents indexed':<28} {_get(result, 'doc_count', 0):>6}")
 
     print(f"\n  {'═' * width}\n")
 
@@ -380,17 +391,17 @@ def _print_ingest_result(result: dict, session: str) -> None:
     width = 52
     print(f"\n  {'═' * width}")
 
-    if result["success"]:
+    if _get(result, "success", False):
         print(f"  ✅ Ingested into '{session}'")
         print(f"  {'─' * width}")
-        print(f"  {'Source':<28} {result.get('source','')[:20]:>6}")
-        print(f"  {'Documents ingested':<28} {result.get('doc_count', 0):>6}")
-        print(f"  {'Chunks created':<28} {result.get('chunk_count', 0):>6}")
-        print(f"  {'Chunks indexed':<28} {result.get('indexed_count', 0):>6}")
+        print(f"  {'Source':<28} {_get(result, 'source','')[:20]:>6}")
+        print(f"  {'Documents ingested':<28} {_get(result, 'doc_count', 0):>6}")
+        print(f"  {'Chunks created':<28} {_get(result, 'chunk_count', 0):>6}")
+        print(f"  {'Chunks indexed':<28} {_get(result, 'indexed_count', 0):>6}")
     else:
         print(f"  ❌ Ingestion failed — no chunks produced")
         print(f"  {'─' * width}")
-        print(f"  {'Documents read':<28} {result.get('doc_count', 0):>6}")
+        print(f"  {'Documents read':<28} {_get(result, 'doc_count', 0):>6}")
 
     print(f"  {'═' * width}\n")
 
@@ -594,7 +605,7 @@ Examples:
         from srag import SRag
 
         sr      = SRag()
-        results = sr.query(args.query, session=args.session, k=args.k, debug=args.debug)
+        results = sr.query_sync(args.query, session=args.session, k=args.k, debug=args.debug)
 
         if args.json:
             print(json.dumps(results, indent=2, default=str))
@@ -848,7 +859,7 @@ Examples:
                 if args.query:
                     print(f"\n  TOP CHUNKS FOR '{args.query}'")
                     print(f"  {'─' * width}")
-                    results = sr.query(args.query, session=args.session, k=5)
+                    results = sr.query_sync(args.query, session=args.session, k=5)
                     for i, r in enumerate(results, 1):
                         from urllib.parse import urlparse
                         domain  = urlparse(r.get("url", r.get("source", ""))).netloc.replace("www.", "")
