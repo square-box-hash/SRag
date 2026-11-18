@@ -1,7 +1,16 @@
+from __future__ import annotations
+
+import logging
 import re
 from typing import List, Optional
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
+
+
+# The loader lives in embeddings.py so both entry points share one message.
+from srag.embeddings import load_sentence_transformer as _load_sentence_transformer
 
 
 # ── Sentence splitter ─────────────────────────────────────────────────────────
@@ -125,7 +134,18 @@ class SmartChunker:
         dedupe_threshold: float = 0.85,
     ):
         # Reuse existing model if passed (avoids reloading)
-        self.model = model or SentenceTransformer(model_name)
+        if model is not None:
+            self.model = model
+        else:
+            try:
+                self.model = _load_sentence_transformer(model_name)
+            except ImportError:
+                # Torch-free install: chunk on the token budget alone.
+                logger.info(
+                    "sentence-transformers is not installed — chunking by token budget "
+                    "without semantic boundary detection."
+                )
+                self.model = None
         self.max_tokens = max_tokens
         self.overlap_sentences = overlap_sentences
         self.semantic_threshold = semantic_threshold
@@ -167,17 +187,21 @@ class SmartChunker:
         if not sentences:
             return []
 
-        # Step 4 — Embed all sentences
-        embeddings = self.model.encode(
-            sentences,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
+        # Step 4 — Embed all sentences (skipped when there is no local model)
+        if self.model is not None:
+            embeddings = self.model.encode(
+                sentences,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            # Step 5 — Find semantic boundaries
+            boundaries = _find_semantic_boundaries(
+                sentences, embeddings, self.semantic_threshold
+            )
+        else:
+            embeddings = None
+            boundaries = []
 
-        # Step 5 — Find semantic boundaries
-        boundaries = _find_semantic_boundaries(
-            sentences, embeddings, self.semantic_threshold
-        )
         boundary_set = set(boundaries)
 
         # Step 6 — Pack into token-budgeted chunks
@@ -204,8 +228,10 @@ class SmartChunker:
             if (at_boundary or over_budget) and current_sentences:
                 chunk = self._make_chunk(
                     current_sentences,
-                    embeddings[[sentences.index(s) for s in current_sentences
-                                 if s in sentences[:len(embeddings)]]],
+                    None
+                    if embeddings is None
+                    else embeddings[[sentences.index(s) for s in current_sentences
+                                     if s in sentences[:len(embeddings)]]],
                     chunk_index,
                     source_url,
                     title,
@@ -225,7 +251,7 @@ class SmartChunker:
         if current_sentences:
             chunk = self._make_chunk(
                 current_sentences,
-                embeddings[-len(current_sentences):],
+                None if embeddings is None else embeddings[-len(current_sentences):],
                 chunk_index,
                 source_url,
                 title,
@@ -261,7 +287,7 @@ class SmartChunker:
     def _make_chunk(
         self,
         sentences: List[str],
-        embeddings: np.ndarray,
+        embeddings: Optional[np.ndarray],
         index: int,
         source_url: str,
         title: str,
@@ -288,7 +314,7 @@ class SmartChunker:
         Average cosine similarity between adjacent sentences.
         Higher = more topically focused chunk.
         """
-        if len(embeddings) < 2:
+        if embeddings is None or len(embeddings) < 2:
             return 1.0
         scores = []
         for i in range(1, len(embeddings)):
