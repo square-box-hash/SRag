@@ -3,6 +3,14 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] — 2026-11-18
+
+### Changed
+- Documentation only. PyPI renders the README frozen at upload time, so the
+  1.3.0 release page still shows the pre-MCP documentation. This release
+  republishes it: the MCP/HTTP section, the extras matrix, async retrieval in the
+  quickstart and the real footprint.
+
 ## [1.3.0] — 2026-11-18
 
 ### Added
