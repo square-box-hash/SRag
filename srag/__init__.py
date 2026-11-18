@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.7"
+__version__ = "1.3.8"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -146,13 +146,15 @@ class SRag:
         force_new:   bool          = False,
         max_results: Optional[int] = None,
         debug:       bool          = False,
+        check_conflicts: bool      = False,
     ) -> SRagResult:
         payload = await self._orchestrator.search(
-            query       = query,
-            session     = session,
-            force_new   = force_new,
-            max_results = max_results,
-            debug       = debug,
+            query           = query,
+            session         = session,
+            force_new       = force_new,
+            max_results     = max_results,
+            debug           = debug,
+            check_conflicts = check_conflicts,
         )
         return self._to_result(payload)
 

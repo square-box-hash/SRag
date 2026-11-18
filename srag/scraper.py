@@ -658,8 +658,8 @@ class AnuInfrastructureScraper:
                 "source": url,
                 "title": self._extract_title(soup) or title,
                 "content": clean_text,
-                "timestamp": self._extract_date(soup)
-                or datetime.utcnow().isoformat(),
+                "timestamp": self._extract_date(soup) or "",
+                "fetched_at": datetime.utcnow().isoformat(),
                 "author": self._extract_author(soup),
                 "image": self._extract_image(soup),
             }
@@ -739,8 +739,8 @@ class AnuInfrastructureScraper:
             "source": url,
             "title": self._extract_title(soup) or title,
             "content": clean_text,
-            "timestamp": self._extract_date(soup)
-            or datetime.utcnow().isoformat(),
+            "timestamp": self._extract_date(soup) or "",
+            "fetched_at": datetime.utcnow().isoformat(),
             "author": self._extract_author(soup),
             "image": self._extract_image(soup),
         }

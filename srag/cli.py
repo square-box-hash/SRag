@@ -463,6 +463,8 @@ Examples:
     idx.add_argument("--session",   type=str, required=True)
     idx.add_argument("--results",   type=int, default=12)
     idx.add_argument("--force-new", action="store_true")
+    idx.add_argument("--check-conflicts", action="store_true",
+                     help="Report sources that disagree with each other")
 
     ing = sub.add_parser("ingest", help="Ingest local files, folders or databases into a session")
     ing.add_argument("source",      type=str, help="File path, folder path, sqlite:// or postgresql:// URI")
@@ -572,12 +574,21 @@ Examples:
         async def _index():
             sr     = SRag(max_results=args.results)
             result = await sr.search(
-                query     = args.query,
-                session   = args.session,
-                force_new = args.force_new,
-                debug     = args.debug,
+                query           = args.query,
+                session         = args.session,
+                force_new       = args.force_new,
+                debug           = args.debug,
+                check_conflicts = getattr(args, "check_conflicts", False),
             )
             _print_index_result(result, args.session, debug=args.debug)
+
+            conflicts = _get(result, "conflicts") or []
+            if conflicts:
+                print(f"  ⚠️  {len(conflicts)} conflicting claim(s) across sources:")
+                for c in conflicts[:5]:
+                    a = (c.get("source_a") or {}).get("url", "?")
+                    b = (c.get("source_b") or {}).get("url", "?")
+                    print(f"     • {c.get('field', 'value')}: {a} vs {b}")
 
         asyncio.run(_index())
 
@@ -646,8 +657,6 @@ Examples:
 
     elif args.command == "read":
         from srag.scraper import AnuInfrastructureScraper
-        from srag.chunker import SmartChunker
-        from sentence_transformers import SentenceTransformer
         import textwrap
 
         async def _read():

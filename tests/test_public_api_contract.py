@@ -1,10 +1,10 @@
 """Contract tests for the public API — the layer that keeps breaking.
 
-These exist because three separate bugs shipped in one session that all had green
-unit tests: `search()` returned a dict instead of `SRagResult`, `query()` became a
-coroutine while the CLI still called it synchronously, and `ingest()` crashed on an
-empty result. Every one of them was a public-API shape change that the internal
-tests never touched.
+These exist because several bugs shipped in one session that all had green unit
+tests: `search()` returned a dict instead of `SRagResult`, `query()` became a
+coroutine while the CLI still called it synchronously, and `ingest()` crashed on
+an empty result. Every one was a public-API shape change the internal tests never
+touched.
 
 No torch, no network, no LanceDB — the orchestrator is stubbed.
 """
@@ -25,8 +25,8 @@ class StubOrchestrator:
     def __init__(self):
         self.calls = []
 
-    async def search(self, query, session, force_new=False, max_results=None, debug=False):
-        self.calls.append(("search", query, session))
+    async def search(self, query, session, force_new=False, max_results=None, debug=False, check_conflicts=False):
+        self.calls.append(("search", query, session, check_conflicts))
         return {
             "session": session,
             "query": query,
@@ -41,6 +41,11 @@ class StubOrchestrator:
                 {"url": "https://a.example", "title": "A again"},
             ],
             "chunks": [{"content": "alpha"}, {"content": "beta"}],
+            "conflicts": (
+                [{"field": "home_team", "source_a": {"url": "a"}, "source_b": {"url": "b"}}]
+                if check_conflicts
+                else []
+            ),
         }
 
     async def verify(self, query, session, debug=False):
@@ -69,7 +74,7 @@ def test_search_returns_sragresult_not_dict():
     assert result.success is True
     assert result.doc_count == 2 and result.chunk_count == 5
     assert result.raw, "raw payload should be preserved for --debug output"
-    assert result.to_json()  # the documented serialiser must work
+    assert result.to_json()
 
 
 def test_search_derives_sources_and_dedupes():
@@ -78,6 +83,16 @@ def test_search_derives_sources_and_dedupes():
 
     urls = [s["url"] for s in result.sources]
     assert urls == ["https://a.example", "https://b.example"], urls
+
+
+def test_conflicts_are_reported_when_requested():
+    sr = make_srag()
+
+    plain = asyncio.run(sr.search("q", session="s1"))
+    assert plain.conflicts == [], plain.conflicts
+
+    checked = asyncio.run(sr.search("q", session="s1", check_conflicts=True))
+    assert checked.conflicts, "conflicts did not reach SRagResult"
 
 
 def test_verify_and_batch_modes_also_return_sragresult():
@@ -116,7 +131,7 @@ def test_ingest_survives_an_empty_indexer_result():
 
     class StubIndexer:
         def index_documents(self, chunks, **kwargs):
-            return None  # the old behaviour that caused the crash
+            return None
 
     class StubOrch:
         def __init__(self):

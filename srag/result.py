@@ -65,6 +65,9 @@ class SRagResult:
     # ── Trace ─────────────────────────────────────────────────────────────────
     trace:         SRagTrace        = field(default_factory=SRagTrace)
 
+    # ── Consistency ───────────────────────────────────────────────────────────
+    conflicts:     list[dict]       = field(default_factory=list)
+
     # ── Raw payload ───────────────────────────────────────────────────────────
     raw:           dict             = field(default_factory=dict)
 
