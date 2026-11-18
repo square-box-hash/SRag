@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -161,8 +161,9 @@ class SRag:
         chunks = self._orchestrator.chunker.chunk_docs(docs)
         stats  = self._orchestrator.indexer.index_documents(
             chunks,
-            table_name = session,
-            force_new  = force_new,
+            table_name    = session,
+            force_new     = force_new,
+            min_coherence = getattr(self._orchestrator.config, "ingest_min_coherence", 0.0),
         ) or {}
 
         indexed = int(stats.get("total_indexed", 0))

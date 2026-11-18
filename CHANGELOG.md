@@ -3,6 +3,19 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] — 2026-11-18
+
+### Fixed
+- `ingest()` silently dropped your own documents. The coherence filter — built to
+  discard scraped web junk — defaults to 0.3, and a short note whose sentences are
+  unrelated scores far below that (0.13 in the case that surfaced this), so the
+  whole file was discarded and `indexed_count` came back 0.
+  New `SRagConfig.ingest_min_coherence`, defaulting to **0.0**: files you supply
+  are indexed. Scraped documents keep the 0.3 threshold.
+- The `get_sentence_embedding_dimension` FutureWarning from
+  sentence-transformers — the newer `get_embedding_dimension` is preferred, with
+  the old name as a fallback.
+
 ## [1.3.2] — 2026-11-18
 
 ### Fixed

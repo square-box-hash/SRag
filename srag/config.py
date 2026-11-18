@@ -27,6 +27,9 @@ class SRagConfig:
     rerank_top_k:      int   = 5
     chunk_size:        int   = 256
     min_chunk_chars:   int   = 100   # raise/lower to index very short documents
+    # Coherence filters scraped web junk. Local files are your own content, so
+    # they are indexed by default rather than silently dropped.
+    ingest_min_coherence: float = 0.0
     dedupe_threshold:  float = 0.85
     db_path:           str   = "./srag_db"
 
