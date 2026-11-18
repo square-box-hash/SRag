@@ -319,13 +319,14 @@ def _print_query_results(
 def _get(result, key, default=None):
     """Read a field from either an SRagResult or the raw orchestrator dict."""
     if isinstance(result, dict):
-        return _get(result, key, default)
+        return result.get(key, default)
     value = getattr(result, key, default)
     if value is default:
         raw = getattr(result, "raw", None) or {}
         if isinstance(raw, dict):
             return raw.get(key, default)
     return value
+
 
 def _print_index_result(result: dict, session: str, debug: bool = False) -> None:
     """Clean structured output for srag index."""
