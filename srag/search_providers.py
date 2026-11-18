@@ -141,7 +141,7 @@ class SearXNGProvider:
 # ── DDGS provider ─────────────────────────────────────────────────────────────
 
 class DDGSProvider:
-    """DuckDuckGo search provider via duckduckgo-search."""
+    """DuckDuckGo search provider. The package was renamed duckduckgo-search -> ddgs."""
 
     def __init__(self, max_results: int = 10, timeout: float = 10.0):
         self.max_results = max_results
@@ -151,7 +151,11 @@ class DDGSProvider:
         """Search via DDGS."""
         k = max_results or self.max_results
         try:
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS          # current package name
+            except ImportError:
+                from duckduckgo_search import DDGS   # pre-rename, still works
+
             loop    = asyncio.get_event_loop()
             results = await loop.run_in_executor(
                 None,
