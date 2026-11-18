@@ -189,7 +189,7 @@ class SRagIndexer:
         min_coherence: float = 0.3,
     ):
         if not docs:
-            return
+            return self._empty_stats(table_name)
 
         table = self._get_or_create_table(table_name, force_new=force_new)
         timestamp_prefix = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -222,7 +222,7 @@ class SRagIndexer:
 
         if not rows:
             print(f"⚠️  [{table_name}] All chunks dropped by coherence filter.")
-            return
+            return self._empty_stats(table_name)
 
         embeddings = self._embed([r["content"] for r in rows])
         for r, emb in zip(rows, embeddings):
@@ -239,6 +239,15 @@ class SRagIndexer:
             "total_indexed": len(rows),
             "table_name": table_name,
             "physical_table": physical,
+            "embedding": self.spec.to_dict(),
+        }
+
+    def _empty_stats(self, session: str) -> dict:
+        """Returned instead of None, so callers can read counts without guarding."""
+        return {
+            "total_indexed": 0,
+            "table_name": session,
+            "physical_table": self.physical_name(session),
             "embedding": self.spec.to_dict(),
         }
 

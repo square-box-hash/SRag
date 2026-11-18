@@ -90,6 +90,7 @@ class SRagOrchestrator:
         self.chunker  = SmartChunker(
             model            = _model,
             max_tokens       = cfg.chunk_size,
+            min_chunk_chars  = getattr(cfg, "min_chunk_chars", 100),
             dedupe_threshold = cfg.dedupe_threshold,
         )
 

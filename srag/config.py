@@ -26,6 +26,7 @@ class SRagConfig:
     max_concurrent:    int   = 5
     rerank_top_k:      int   = 5
     chunk_size:        int   = 256
+    min_chunk_chars:   int   = 100   # raise/lower to index very short documents
     dedupe_threshold:  float = 0.85
     db_path:           str   = "./srag_db"
 

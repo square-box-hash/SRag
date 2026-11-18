@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -163,14 +163,25 @@ class SRag:
             chunks,
             table_name = session,
             force_new  = force_new,
-        )
+        ) or {}
+
+        indexed = int(stats.get("total_indexed", 0))
+        if docs and not chunks:
+            # The usual cause is a document shorter than min_chunk_chars.
+            min_chars = getattr(self._orchestrator.chunker, "min_chunk_chars", 100)
+            print(
+                f"⚠️  Read {len(docs)} document(s) but produced no chunks. "
+                f"Content may be shorter than min_chunk_chars={min_chars}, or contain "
+                f"no sentence boundaries. Lower SRagConfig.min_chunk_chars to index it."
+            )
+
         return {
             "session":       session,
             "source":        source,
             "doc_count":     len(docs),
             "chunk_count":   len(chunks),
-            "indexed_count": stats.get("total_indexed", 0),
-            "success":       len(chunks) > 0,
+            "indexed_count": indexed,
+            "success":       indexed > 0,
         }
 
     # ── Retrieval ─────────────────────────────────────────────────────────────

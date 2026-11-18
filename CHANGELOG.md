@@ -3,6 +3,20 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] — 2026-11-18
+
+### Fixed
+- `SRag.ingest()` crashed with `AttributeError: 'NoneType' object has no attribute
+  'get'` whenever a document produced no chunks — a short note under
+  `min_chunk_chars` was enough to trigger it. `index_documents()` now always
+  returns a stats dict, and `ingest()` reports the real reason instead of dying.
+- `ingest()` now returns `success: False` when nothing was indexed, rather than
+  `True` just because chunks existed before the coherence filter.
+
+### Added
+- `SRagConfig.min_chunk_chars` (default 100), so short documents can be indexed
+  without reaching into the chunker.
+
 ## [1.3.1] — 2026-11-18
 
 ### Changed
