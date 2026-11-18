@@ -1,12 +1,11 @@
+from __future__ import annotations
+
 import logging
 from typing import Optional
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from srag.orchestrator import SRagOrchestrator
-from srag.scraper import AnuInfrastructureScraper
-from srag.indexer import SRagIndexer
 from srag.embeddings import (
     Embedder,
     EmbeddingMismatchError,
@@ -16,10 +15,31 @@ from srag.embeddings import (
     build_embedder,
 )
 from srag.config import SRagConfig
-from srag.ingestor import DocumentIngestor
 from srag.result import SRagResult, SRagTrace
-from srag.tracer import SRagTracer
-from srag.recency import RecencyRanker
+
+# Everything that pulls in torch, playwright or the scraper stack is imported on
+# first access, so `import srag` costs a fraction of what it used to.
+_LAZY_EXPORTS = {
+    "SRagOrchestrator": ("srag.orchestrator", "SRagOrchestrator"),
+    "AnuInfrastructureScraper": ("srag.scraper", "AnuInfrastructureScraper"),
+    "SRagIndexer": ("srag.indexer", "SRagIndexer"),
+    "DocumentIngestor": ("srag.ingestor", "DocumentIngestor"),
+    "SRagTracer": ("srag.tracer", "SRagTracer"),
+    "RecencyRanker": ("srag.recency", "RecencyRanker"),
+}
+
+
+def __getattr__(name: str):
+    """PEP 562 — resolve heavy exports only when something actually asks for them."""
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module 'srag' has no attribute {name!r}")
+    from importlib import import_module
+
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value
 from srag.exceptions import (
     SRagError,
     SRagFetchError,
@@ -37,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -77,6 +97,11 @@ class SRag:
         extract_mode:   str        = "trafilatura",
         max_concurrent: int        = 5,
     ):
+        # Imported here so the package itself stays importable without the
+        # scraper stack, playwright or torch.
+        from srag.ingestor import DocumentIngestor
+        from srag.orchestrator import SRagOrchestrator
+
         self._orchestrator = SRagOrchestrator(
             config         = config,
             max_results    = max_results,
@@ -150,16 +175,17 @@ class SRag:
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
 
-    def query(
+    async def query(
         self,
         query:   str,
         session: str,
         k:       int  = 5,
         debug:   bool = False,
     ) -> list[dict]:
+        """Async so every retrieval entry point matches search()."""
         return self._orchestrator.query(query, session, k=k, debug=debug)
 
-    def query_session(
+    async def query_session(
         self,
         query:   str,
         session: str,
@@ -168,7 +194,29 @@ class SRag:
     ) -> list[dict]:
         return self._orchestrator.query_session(query, session, k=k, debug=debug)
 
-    def build_context(
+    async def build_context(
+        self,
+        query:        str,
+        session:      str,
+        k:            int           = 10,
+        token_budget: Optional[int] = None,
+        debug:        bool          = False,
+    ):
+        return self._orchestrator.build_context(
+            query, session, k=k, token_budget=token_budget, debug=debug
+        )
+
+    # ── Synchronous aliases (pre-1.3 callers, and scripts) ────────────────────
+
+    def query_sync(self, query: str, session: str, k: int = 5, debug: bool = False) -> list[dict]:
+        return self._orchestrator.query(query, session, k=k, debug=debug)
+
+    def query_session_sync(
+        self, query: str, session: str, k: int = 5, debug: bool = False
+    ) -> list[dict]:
+        return self._orchestrator.query_session(query, session, k=k, debug=debug)
+
+    def build_context_sync(
         self,
         query:        str,
         session:      str,

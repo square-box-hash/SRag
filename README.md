@@ -62,6 +62,9 @@ pip install srag
 # With PDF and DOCX support
 pip install srag[docs]
 
+# With local embeddings + reranker (pulls torch, ~800 MB)
+pip install srag[local]
+
 # With PostgreSQL support
 pip install srag[databases]
 
@@ -84,6 +87,40 @@ cp .env.example .env
 # Add your HuggingFace token (free):
 # HF_TOKEN=your_token_here
 ```
+
+---
+
+## Embedding providers
+
+The vector dimension belongs to the embedding model, so SRag namespaces its
+tables by provider + model + dimension — `web_chunks__local__all-minilm-l6-v2__384`.
+Switching provider creates a sibling table instead of corrupting the existing
+index, and `index_meta.json` records which model built each one.
+
+| Provider | Install | Needs | Text leaves the machine |
+|---|---|---|---|
+| `local` (default) | `pip install srag[local]` | ~800 MB of torch | No |
+| `google` | nothing extra | `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Yes, to Google |
+
+```python
+from srag import SRag, SRagConfig
+
+# Local and offline — the default
+sr = SRag(config=SRagConfig(embedding_provider="local"))
+
+# Hosted embeddings: no torch, no local model, no CPU cost between calls
+sr = SRag(config=SRagConfig(
+    embedding_provider="google",
+    embedding_model="text-embedding-004",
+))
+```
+
+**Lean installs.** `pip install srag` no longer pulls torch. Local embeddings and
+the CrossEncoder reranker need `srag[local]`; when it is missing SRag falls back
+to budget-only chunking and skips reranking rather than failing, so a
+Google-embedding deployment installs no torch at all. `import srag` resolves
+heavy modules lazily — `SRagOrchestrator`, `SRagIndexer`, `DocumentIngestor` and
+friends load on first use.
 
 ---
 

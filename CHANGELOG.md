@@ -3,6 +3,34 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-11-18
+
+### Added
+- **Embedding providers.** `LocalEmbedder` (sentence-transformers, offline) and
+  `GoogleEmbedder` (Generative Language `batchEmbedContents` over httpx, so no new
+  dependency). `SRagConfig` gains `embedding_provider`, `embedding_model`,
+  `embedding_dimension` and `google_api_key`.
+- **Namespaced indexes.** Tables are suffixed with provider + model + dimension,
+  `index_meta.json` records what built each one, and `describe(session)` reads it
+  back. Switching provider creates a sibling table instead of rewriting the old.
+- **Async retrieval.** `query()`, `query_session()` and `build_context()` are now
+  coroutines to match `search()`. `query_sync()`, `query_session_sync()` and
+  `build_context_sync()` keep pre-1.3 code working.
+
+### Changed
+- `sentence-transformers` moved from the core dependencies into the `local`
+  extra. `import srag` no longer loads torch — 154 ms, and torch, playwright and
+  trafilatura stay out of `sys.modules` until something needs them.
+- Heavy exports (`SRagOrchestrator`, `SRagIndexer`, `DocumentIngestor`,
+  `SRagTracer`, `RecencyRanker`, `AnuInfrastructureScraper`) are resolved lazily
+  through PEP 562.
+- Chunking degrades to token-budget packing and the reranker is skipped when
+  `sentence-transformers` is absent, instead of failing at import.
+
+### Fixed
+- A query embedded at a different dimension than the index raises
+  `EmbeddingMismatchError` naming both models, rather than returning nonsense.
+
 ## [1.2.1] — 2026-07-05
 
 ### Fixed

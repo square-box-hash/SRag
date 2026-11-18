@@ -49,6 +49,19 @@ class EmbeddingMismatchError(ValueError):
     """Raised when a query is embedded with a different model than the index used."""
 
 
+def load_sentence_transformer(model_name: str):
+    """Imported on demand — torch is ~800 MB and only local embeddings need it."""
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise ImportError(
+            "Local embeddings need sentence-transformers. Install it with "
+            "`pip install srag[local]`, or set "
+            "SRagConfig(embedding_provider='google') to use Google embeddings instead."
+        ) from exc
+    return SentenceTransformer(model_name)
+
+
 class Embedder(Protocol):
     @property
     def spec(self) -> EmbeddingSpec: ...
@@ -61,9 +74,7 @@ class LocalEmbedder:
 
     def __init__(self, model_name: str = DEFAULT_LOCAL_MODEL, model=None):
         if model is None:
-            from sentence_transformers import SentenceTransformer
-
-            model = SentenceTransformer(model_name)
+            model = load_sentence_transformer(model_name)
         self._model = model
 
         dimension = getattr(model, "get_sentence_embedding_dimension", lambda: None)()

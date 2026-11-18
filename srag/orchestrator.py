@@ -6,7 +6,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 import lancedb
-from sentence_transformers import CrossEncoder, SentenceTransformer
+
 logging.getLogger("trafilatura").setLevel(logging.CRITICAL)
 
 from srag.config import SRagConfig
@@ -75,7 +75,15 @@ class SRagOrchestrator:
         self.config = cfg
         
         # ── Shared model instance ─────────────────────────────────────────────
-        _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        # Loaded only for local embeddings. With a hosted embedder (Google) the
+        # package never touches torch: a lean install instead of a ~2 GB image.
+        _model = None
+        if (getattr(cfg, "embedding_provider", "") or "local").lower() == "local":
+            from srag.chunker import _load_sentence_transformer
+
+            _model = _load_sentence_transformer(
+                getattr(cfg, "embedding_model", "") or "sentence-transformers/all-MiniLM-L6-v2"
+            )
 
         # ── Core components ───────────────────────────────────────────────────
         self.indexer  = SRagIndexer(db_path=cfg.db_path, model=_model, config=cfg)
@@ -86,10 +94,19 @@ class SRagOrchestrator:
         )
 
         # ── Conditional reranker ──────────────────────────────────────────────
-        self.reranker = (
-            CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
-            if cfg.use_reranker else None
-        )
+        self.reranker = None
+        if cfg.use_reranker:
+            try:
+                from sentence_transformers import CrossEncoder
+
+                self.reranker = CrossEncoder(
+                    "cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512
+                )
+            except ImportError:
+                logger.warning(
+                    "use_reranker is enabled but sentence-transformers is not installed — "
+                    "reranking skipped. Install it with `pip install srag[local]`."
+                )
 
         # ── Shared LanceDB connection ─────────────────────────────────────────
         _db = self.indexer.db
