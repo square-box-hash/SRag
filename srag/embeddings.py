@@ -77,7 +77,14 @@ class LocalEmbedder:
             model = load_sentence_transformer(model_name)
         self._model = model
 
-        dimension = getattr(model, "get_sentence_embedding_dimension", lambda: None)()
+        # sentence-transformers renamed this; support both without a warning.
+        for attr in ("get_embedding_dimension", "get_sentence_embedding_dimension"):
+            getter = getattr(model, attr, None)
+            if callable(getter):
+                dimension = getter()
+                break
+        else:
+            dimension = None
         if not dimension:
             raise ValueError(
                 f"Could not determine the embedding dimension of '{model_name}'. "
