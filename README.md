@@ -13,9 +13,12 @@
 
 *No API keys. No cloud costs. No data leaving your device.*
 
+<sub>Local by default — that includes the embedding model. Bring a Google key only if
+you would rather not run one yourself: see [Embedding providers](#embedding-providers).</sub>
+
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.0.0-purple.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
+[![Version](https://img.shields.io/badge/version-v1.3.0-purple.svg?style=flat-square)](https://github.com/square-box-hash/SRag/releases)
 [![PyPI](https://img.shields.io/badge/pypi-srag-orange.svg?style=flat-square)](https://pypi.org/project/srag)
 [![Status](https://img.shields.io/badge/status-stable-brightgreen.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
 
@@ -135,10 +138,10 @@ sr = SRag()
 result = await sr.search("West Bengal election results 2026", session="wb_elections")
 
 # Query the indexed session
-chunks = sr.query("who won the most seats?", session="wb_elections", k=5)
+chunks = await sr.query("who won the most seats?", session="wb_elections", k=5)
 
 # Build structured context for an LLM
-context = sr.build_context("who won the most seats?", session="wb_elections")
+context = await sr.build_context("who won the most seats?", session="wb_elections")
 print(context.to_prompt())
 
 # Export for downstream systems
@@ -147,6 +150,11 @@ print(result.to_mongodb())     # MongoDB-ready document
 print(result.to_jsonl())       # JSONL for streaming pipelines
 print(result.trace.summary())  # fetch=210ms chunk=45ms embed=380ms rerank=90ms
 ```
+
+Every retrieval call is a coroutine — `search()`, `query()`, `query_session()` and
+`build_context()` — so it drops straight into an async agent or an MCP tool. In a
+plain script, use the synchronous aliases: `query_sync()`,
+`query_session_sync()`, `build_context_sync()`.
 
 **CLI in 30 seconds**
 
@@ -158,6 +166,42 @@ srag query "how do I add middleware?" --session fastapi
 srag ingest report.pdf --session research        # local file ingestion
 srag inspect --show candidates                   # see what SRag is learning
 ```
+
+---
+
+## Use it from an agent — MCP and HTTP
+
+`srag` ships a FastAPI server, and with `srag[mcp]` that same app is mounted as an
+MCP server. Any MCP client — Anu, Claude Desktop, Cursor — gets search, query and
+ingest as tools without writing an adapter.
+
+```bash
+pip install "srag[mcp]"
+srag serve --port 8000
+# or: uvicorn srag.server:app --host 0.0.0.0 --port 8000
+```
+
+| Endpoint | What it is |
+|---|---|
+| `http://localhost:8000/health` | Liveness, plus whether MCP is mounted |
+| `http://localhost:8000/mcp/sse` | MCP over SSE — the address an agent connects to |
+| `/search`, `/query`, `/ingest` | Plain HTTP, for anything that isn't an MCP client |
+
+Point a client at it:
+
+```json
+{
+  "mcpServers": {
+    "srag": { "url": "http://localhost:8000/mcp/sse" }
+  }
+}
+```
+
+Two things worth knowing before you wire it up. **Run SRag as its own service, not
+inside the agent's process** — it holds a LanceDB index and an embedding model, and
+a chat app should not carry either. And **the free hosting tier that sleeps after an
+hour will break tool calls**; the first call of the day hits a cold container and
+fails mid-answer. Give this service somewhere that stays up.
 
 ---
 
@@ -520,15 +564,29 @@ from srag import (
 | v0.8.0 | ✅ shipped | Topic-aware lexicon, coherence scoring, `srag read`, `srag inspect`, result caching |
 | v0.9.0 | ✅ shipped | Local file ingestion (PDF/DOCX/TXT/CSV/JSON), database ingestion, `SRagConfig` feature toggles, recency-aware ranking |
 | v1.0.0 | ✅ shipped | PyPI publish, SearXNG+DDGS search layer, `SRagResult` typed returns, `SRagTracer` timing, typed exceptions, stable public API |
+| v1.3.0 | ✅ shipped | Pluggable embeddings (local or Google), indexes namespaced by model, async retrieval API, torch-free base install |
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- HuggingFace token (free) for model downloads
-- Optional: `pip install srag[docs]` for PDF/DOCX
-- Optional: `pip install srag[databases]` for PostgreSQL
+- No API keys, no account, no hosted service
+
+**The base install is deliberately lean.** `pip install srag` does not pull torch:
+`import srag` resolves in ~150 ms and loads nothing heavy until a feature needs it.
+
+| Extra | Adds | You need it for |
+|---|---|---|
+| *(none)* | core pipeline, LanceDB, SearXNG/DDGS search | search, index and query with Google embeddings |
+| `srag[local]` | sentence-transformers + torch (~800 MB) | offline embeddings and the CrossEncoder reranker |
+| `srag[mcp]` | FastAPI + `fastapi-mcp` | running SRag as an MCP server for an agent |
+| `srag[docs]` | pymupdf, python-docx | ingesting PDFs and Word documents |
+| `srag[databases]` | psycopg2-binary | ingesting PostgreSQL |
+| `srag[all]` | everything above | — |
+
+Without `srag[local]`, chunking falls back to token-budget packing and reranking is
+skipped, rather than failing — which is the point of keeping torch optional.
 
 ---
 
