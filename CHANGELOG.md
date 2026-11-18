@@ -3,6 +3,25 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.7] — 2026-11-18
+
+### Fixed
+- **`srag search` and `srag index` crashed on every run in 1.3.6.** The bulk
+  rewrite that introduced `_get()` also rewrote the helper's own body into
+  `return _get(...)`, so any command reaching the printers hit `RecursionError`.
+  Caught by the new CLI smoke tests within a minute of writing them.
+
+### Added
+- `tests/test_public_api_contract.py` — asserts `search()`, `verify()`,
+  `parallel_search()` and `sequential_search()` return `SRagResult`, that sources
+  are derived and deduped, that retrieval is async with sync aliases, and that
+  `ingest()` survives an indexer that returns `None`.
+- `tests/test_cli_smoke.py` — drives `srag query` through `main()` with a stubbed
+  `SRag`, and checks both printers against a dict *and* an `SRagResult`. These are
+  the two shapes whose mismatch shipped twice.
+
+Both suites run with no torch, no network and no LanceDB.
+
 ## [1.3.6] — 2026-11-18
 
 ### Fixed
@@ -24,8 +43,14 @@ above and invisible to the unit tests, which never invoke the CLI.
 ### Fixed
 - Every search logged `Reputation update failed ... 'DomainFilterStore' object has
   no attribute 'record'`. The store exposes `record_coherence()`, not
-  `record.coherence()`; the reputation layer had been failing silently on every
-  domain since it was written, because the exception was swallowed per domain.
+  `record.coherence()`.
+
+  Correction to the original wording of this entry: `reputation.update()` runs
+  *before* the failing line, so domain reputation **was** learning — which is why
+  repeated searches for the same topic visibly improved. What the exception killed
+  was everything after it: the cold-start cap (so a domain could reach high
+  confidence after a single scrape) and the low-coherence flagging in
+  `DomainFilterStore`.
 - `trace.summary()` reported all zeros. The orchestrator never built a trace, so
   the timing fields the README advertises were always empty. `search()` now times
   fetch, chunk and index and returns a real `SRagTrace`.
