@@ -3,6 +3,22 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.6] — 2026-11-18
+
+### Fixed
+- **`srag query` was broken by 1.3.0.** The CLI called `sr.query(...)` without
+  awaiting it after `query()` became a coroutine, so it printed a coroutine object
+  instead of results. It uses `query_sync()` now. Same for `srag inspect --query`.
+- **`srag search` and `srag index` were broken by 1.3.4.** The CLI reads results
+  with `result["success"]` and `result.get(...)`, and 1.3.4 started returning
+  `SRagResult`. Both printers now accept either shape.
+- `SRagResult.raw` keeps the orchestrator payload, so `--debug` output and any key
+  not modelled on the dataclass survives the wrapping.
+
+### Note
+These were regressions in the library's own CLI, introduced by two of the fixes
+above and invisible to the unit tests, which never invoke the CLI.
+
 ## [1.3.5] — 2026-11-18
 
 ### Fixed

@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.5"
+__version__ = "1.3.6"
 __all__ = [
     "SRag",
     "SRagConfig",
@@ -123,8 +123,10 @@ class SRag:
             return SRagResult(success=False, mode=mode, error=str(payload))
 
         allowed = set(SRagResult.__dataclass_fields__)
-        kwargs = {k: v for k, v in payload.items() if k in allowed}
+        kwargs = {k: v for k, v in payload.items() if k in allowed and k != "raw"}
         kwargs.setdefault("mode", mode)
+        # Keep the orchestrator payload reachable (debug block, extra keys).
+        kwargs["raw"] = payload
 
         if not kwargs.get("sources"):
             seen, sources = set(), []

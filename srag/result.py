@@ -65,6 +65,9 @@ class SRagResult:
     # ── Trace ─────────────────────────────────────────────────────────────────
     trace:         SRagTrace        = field(default_factory=SRagTrace)
 
+    # ── Raw payload ───────────────────────────────────────────────────────────
+    raw:           dict             = field(default_factory=dict)
+
     # ── Error info ────────────────────────────────────────────────────────────
     error:         Optional[str]    = None
     reason:        Optional[str]    = None
