@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlparse
@@ -198,15 +199,21 @@ class SRagOrchestrator:
 
             logger.info("Searching [%s]: %s (topic=%s)", session, query, topic)
 
+            started = time.perf_counter()
+
             # ── Fetch ─────────────────────────────────────────────────────────
+            fetch_started = time.perf_counter()
             docs = await scraper.get_facts(query, collector=collector)
+            fetch_ms = (time.perf_counter() - fetch_started) * 1000
 
             if not docs:
                 logger.warning("[%s] No documents found", session)
                 return self._empty_result(session, query, success=False)
 
             # ── Chunk ─────────────────────────────────────────────────────────
+            chunk_started = time.perf_counter()
             chunks = self.chunker.chunk_docs(docs)
+            chunk_ms = (time.perf_counter() - chunk_started) * 1000
 
             if not chunks:
                 logger.warning("[%s] No chunks after processing", session)
@@ -247,11 +254,13 @@ class SRagOrchestrator:
             self._populate_chunk_records(collector, chunks, session_quality)
 
             # ── Index ─────────────────────────────────────────────────────────
+            index_started = time.perf_counter()
             indexed_stats = self.indexer.index_documents(
                 chunks,
                 table_name = session,
                 force_new  = force_new,
             )
+            embed_ms = (time.perf_counter() - index_started) * 1000
             indexed_count = indexed_stats.get("total_indexed", 0)
 
             logger.info(
@@ -272,6 +281,16 @@ class SRagOrchestrator:
                 "success":       True,
                 "docs":          docs,
                 "chunks":        chunks,
+                "trace":         SRagTrace(
+                    fetch_ms    = fetch_ms,
+                    chunk_ms    = chunk_ms,
+                    embed_ms    = embed_ms,
+                    total_ms    = (time.perf_counter() - started) * 1000,
+                    doc_count   = len(docs),
+                    chunk_count = len(chunks),
+                    topic       = topic,
+                    mode        = "simple",
+                ),
                 **({"debug": {
                     "quality":     quality_summary,
                     "collector":   collector.summary(),
@@ -473,7 +492,7 @@ class SRagOrchestrator:
 
                 # Cold start cap — prevent early overconfidence
                 if self.domain_filters is not None:
-                    self.domain_filters.record.coherence(
+                    self.domain_filters.record_coherence(
                         domain, signals["avg_chunk_quality"]
                     )
                 record = self.reputation.get(domain, topic)
@@ -621,4 +640,5 @@ class SRagOrchestrator:
             "docs":          [],
             "chunks":        [],
             "reason":        reason,
+            "trace":         SRagTrace(doc_count=doc_count, mode="simple"),
         }

@@ -3,6 +3,19 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] — 2026-11-18
+
+### Fixed
+- Every search logged `Reputation update failed ... 'DomainFilterStore' object has
+  no attribute 'record'`. The store exposes `record_coherence()`, not
+  `record.coherence()`; the reputation layer had been failing silently on every
+  domain since it was written, because the exception was swallowed per domain.
+- `trace.summary()` reported all zeros. The orchestrator never built a trace, so
+  the timing fields the README advertises were always empty. `search()` now times
+  fetch, chunk and index and returns a real `SRagTrace`.
+- `list_sessions()` returned SRag's own bookkeeping tables (`lexicon`,
+  `domain_reputation`, `domain_filters`) as if they were user sessions.
+
 ## [1.3.4] — 2026-11-18
 
 ### Fixed

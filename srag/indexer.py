@@ -298,6 +298,9 @@ class SRagIndexer:
     def query_session(self, query: str, session: str, k: int = 5) -> List[dict]:
         return self.semantic_search(query=query, table_name=session, k=k)
 
+    # Bookkeeping tables SRag creates for itself; they are not user sessions.
+    INTERNAL_TABLES = {"lexicon", "domain_reputation", "domain_filters", "sessions"}
+
     def list_sessions(self) -> List[str]:
         """Logical session names — namespaced physical tables are collapsed back."""
         sessions: List[str] = []
@@ -312,6 +315,8 @@ class SRagIndexer:
                 session = physical.rsplit("__", 3)[0]
             else:
                 session = physical
+            if session in self.INTERNAL_TABLES:
+                continue
             if session not in sessions:
                 sessions.append(session)
 
