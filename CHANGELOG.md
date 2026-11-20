@@ -3,6 +3,39 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.10] — 2026-11-20
+
+### Fixed
+- **The container served no MCP endpoint.** `srag[all]` never included the `mcp`
+  extra and the Dockerfile installed exactly that, so an image built from it
+  answered HTTP only and an agent had nothing to connect to. `all` includes `mcp`
+  now, and the image asks for it explicitly in case the extra list changes again.
+- **The image was unpinned.** It installed whatever `srag` PyPI served at build
+  time — including 1.3.8, whose `server.py` does not parse. It pins the release.
+- **The volume was mounted where nothing wrote.** `db_path` defaults to
+  `./srag_db` while compose mounted `/app/srag_data`, so every restart dropped the
+  index and re-searched from scratch. `SRagConfig.db_path` now honours
+  `SRAG_DB_PATH` and `SRAG_DATA_DIR`, and the explicit `"./srag_db"` defaults in
+  `SRag` and `SRagOrchestrator` no longer override the configured path. The
+  compose file mounts at the default path, so it works on this release either way.
+- **The healthcheck did not warm the model.** It called `/health`, which never
+  builds the SRag instance, so the container reported healthy while the indexer
+  and embedding model were still cold and the first search paid that cost. It
+  calls `/sessions` now, with the bearer header when a token is set.
+
+### Changed
+- The container publishes on `127.0.0.1` instead of every interface, and compose
+  passes `SRAG_API_TOKEN`, `SRAG_INGEST_ROOTS` and `SRAG_ALLOWED_ORIGINS`. A
+  service behind a tunnel is reachable by anyone who learns the hostname, and
+  tunnel hostnames are published to certificate transparency logs — the token is
+  the authentication, the URL is not.
+- README documents running SRag as a container behind a public URL, and states
+  plainly that a tunnel is reachability rather than hosting: the URL forwards to a
+  bridge on the machine that started it, so that machine has to stay on.
+
+### Added
+- `.env.example` — the README had told people to copy one that did not exist.
+
 ## [1.3.9] — 2026-11-20
 
 ### Fixed
@@ -266,6 +299,18 @@ above and invisible to the unit tests, which never invoke the CLI.
 - Added `cssselect>=1.2` — required by `DOMDistiller` for CSS selector matching via `lxml`
 - Added `playwright>=1.3` — required by `DOMDistiller` for live-DOM scraping
 
+
+## [1.1.0] — 2026-06-06
+
+### Added
+- **FastAPI server** (`srag/server.py`) — search, parallel and sequential search,
+  verification, query, context, ingest and session listing over HTTP.
+- **MCP server**, mounted from the same FastAPI app, so an agent can use SRag as a
+  tool server without an adapter (`pip install srag[mcp]`).
+- **`Dockerfile` and `docker-compose.yml`** for running SRag as a service, with an
+  optional self-hosted SearXNG profile.
+- `srag serve` on the CLI.
+- A PyPI publish workflow, so a tag ships the release.
 
 ## [1.0.0] — 2026-05-28
 

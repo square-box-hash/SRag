@@ -17,8 +17,8 @@
 you would rather not run one yourself: see [Embedding providers](#embedding-providers).</sub>
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-v1.3.0-purple.svg?style=flat-square)](https://github.com/square-box-hash/SRag/releases)
+[![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](https://github.com/square-box-hash/SRag/blob/main/LICENSE)
+[![Version](https://img.shields.io/pypi/v/srag?style=flat-square&color=purple)](https://pypi.org/project/srag/)
 [![PyPI](https://img.shields.io/badge/pypi-srag-orange.svg?style=flat-square)](https://pypi.org/project/srag)
 [![Status](https://img.shields.io/badge/status-stable-brightgreen.svg?style=flat-square)](https://github.com/square-box-hash/SRag)
 
@@ -74,8 +74,11 @@ pip install srag[databases]
 # Everything
 pip install srag[all]
 
-# Latest from GitHub
-pip install git+https://github.com/square-box-hash/SRag.git@v1.0.0
+# Latest from GitHub (main branch)
+pip install git+https://github.com/square-box-hash/SRag.git
+
+# Or pin a specific release
+pip install git+https://github.com/square-box-hash/SRag.git@v1.3.9
 
 # Local development
 git clone https://github.com/square-box-hash/SRag.git
@@ -87,9 +90,18 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-# Add your HuggingFace token (free):
-# HF_TOKEN=your_token_here
 ```
+
+Everything in `.env` is optional. The settings you are most likely to touch:
+
+```bash
+EMBEDDING_PROVIDER=local      # or "google" (then set GOOGLE_API_KEY)
+SEARXNG_INSTANCE=             # your own SearXNG; blank = auto-detect + DDGS fallback
+HF_TOKEN=                     # optional: a free HuggingFace token raises model-download rate limits
+SRAG_API_TOKEN=               # set this before exposing the server beyond localhost
+```
+
+See `.env.example` for the full list.
 
 ---
 
@@ -331,7 +343,7 @@ fails mid-answer. Give this service somewhere that stays up.
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      SearchLayer (v1.0.0)                       │
+│                          SearchLayer                            │
 │                                                                 │
 │  Priority 1: SearXNG  ←─── self-hosted or public instance       │
 │       ↓ fallback if unavailable                                 │
@@ -531,6 +543,8 @@ if result.status == "conflict_detected":
 
 ## Local file and database ingestion
 
+> `ingest()` is synchronous (unlike `search()` / `query()`), so call it without `await`.
+
 SRag ingests local files and databases using the same pipeline as web retrieval — chunked, embedded, and indexed into a session.
 
 ```python
@@ -638,7 +652,7 @@ from srag import SRag, SRagSessionNotFoundError, SRagQualityError
 sr = SRag()
 
 try:
-    chunks = sr.query("question", session="nonexistent")
+    chunks = sr.query_sync("question", session="nonexistent")   # or: await sr.query(...)
 except SRagSessionNotFoundError as e:
     print(e.message)   # "Session 'nonexistent' not found. Run `srag index` first."
 
@@ -669,7 +683,20 @@ from srag import (
 | v0.8.0 | ✅ shipped | Topic-aware lexicon, coherence scoring, `srag read`, `srag inspect`, result caching |
 | v0.9.0 | ✅ shipped | Local file ingestion (PDF/DOCX/TXT/CSV/JSON), database ingestion, `SRagConfig` feature toggles, recency-aware ranking |
 | v1.0.0 | ✅ shipped | PyPI publish, SearXNG+DDGS search layer, `SRagResult` typed returns, `SRagTracer` timing, typed exceptions, stable public API |
+| v1.1.0 | ✅ shipped | FastAPI HTTP server, Docker support, MCP server via `fastapi-mcp` |
+| v1.2.0 | ✅ shipped | `DOMDistiller` structural HTML pruning, `DomainFilterStore` per-domain selector overrides, Playwright live-DOM path, `/inspect` and `/read` endpoints |
+| v1.2.1 | ✅ shipped | Scraper `sympy` shadowing, `srag read` fallback, cross-document chunk dedup |
 | v1.3.0 | ✅ shipped | Pluggable embeddings (local or Google), indexes namespaced by model, async retrieval API, torch-free base install |
+| v1.3.1 | ✅ shipped | Documentation only — PyPI freezes the README at upload, so the 1.3.0 page still showed pre-MCP docs |
+| v1.3.2 | ✅ shipped | `ingest()` crashed when a document produced no chunks |
+| v1.3.3 | ✅ shipped | Coherence filter silently dropped your own short documents |
+| v1.3.4 | ✅ shipped | `search()` returns `SRagResult` instead of a raw dict |
+| v1.3.5 | ✅ shipped | Reputation update logged a failure on every search |
+| v1.3.6 | ✅ shipped | `srag query` awaited — no more coroutine printed |
+| v1.3.7 | ✅ shipped | `srag search` / `srag index` RecursionError, plus the CLI smoke tests that catch it |
+| v1.3.8 | ✅ shipped | Dates no longer fabricated, `--check-conflicts` |
+| v1.3.9 | ✅ shipped | Server hardening: loopback bind by default, bearer-token auth, CORS allowlist, `SRAG_INGEST_ROOTS`; fixed server import and MCP mount (see [CHANGELOG](https://github.com/square-box-hash/SRag/blob/main/CHANGELOG.md)) |
+| v1.3.10 | ✅ shipped | Container serves MCP, keeps its index across restarts, and is only healthy once warm |
 
 ---
 
@@ -697,7 +724,7 @@ skipped, rather than failing — which is the point of keeping torch optional.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT — see [LICENSE](https://github.com/square-box-hash/SRag/blob/main/LICENSE)
 
 ---
 

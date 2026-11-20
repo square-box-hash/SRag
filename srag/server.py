@@ -1,5 +1,5 @@
 """
-srag/server.py — SRag FastAPI Server (v1.3.9)
+srag/server.py — SRag FastAPI Server (v1.3.10)
 
 Wraps the SRag library as a language-agnostic HTTP service.
 Any language that can make HTTP requests can now use SRag.
@@ -40,7 +40,7 @@ app = FastAPI(
         "Smart RAG — local retrieval as an HTTP service. "
         "Replaces Tavily, Firecrawl, and Perplexity with a single open-source pipeline."
     ),
-    version="1.3.9",
+    version="1.3.10",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -309,14 +309,14 @@ def _build_prompt_string(question: str, chunks: list[dict]) -> str:
 @app.get("/health", tags=["System"])
 async def health():
     """Liveness check."""
-    return {"status": "ok", "version": "1.3.9", "service": "srag"}
+    return {"status": "ok", "version": "1.3.10", "service": "srag"}
 
 
 @app.get("/", tags=["System"])
 async def root():
     return {
         "service": "SRag API",
-        "version": "1.3.9",
+        "version": "1.3.10",
         "docs": "/docs",
         "mcp": {
             "available": _mcp_available,

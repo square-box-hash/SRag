@@ -1,7 +1,7 @@
 services:
   srag:
     build: .
-    image: srag:1.3.9
+    image: srag:1.3.10
     container_name: srag
     # Loopback only. A tunnel connects to the port on this machine; nothing else
     # needs to reach it, and publishing it on the LAN invites the wildcard-CORS
