@@ -128,6 +128,27 @@ class SRagIndexer:
         }
         self._write_meta(meta)
 
+    def delete_session(self, session: str) -> bool:
+        """Drop a session's index and its metadata entry.
+
+        Returns False when there is nothing to delete, so callers can answer
+        404 instead of pretending the wipe succeeded.
+        """
+        physical = self.physical_name(session)
+        tables = self._tables()
+        if physical not in tables:
+            # Indexes written before namespacing used the bare session name.
+            if session in tables:
+                physical = session
+            else:
+                return False
+
+        self.db.drop_table(physical)
+        meta = self._read_meta()
+        if meta["tables"].pop(physical, None) is not None:
+            self._write_meta(meta)
+        return True
+
     def describe(self, session: str) -> Optional[dict]:
         """What model built a session's index — for CLI/MCP reporting."""
         physical = self.physical_name(session)

@@ -184,18 +184,66 @@ srag serve --port 8000
 | Endpoint | What it is |
 |---|---|
 | `http://localhost:8000/health` | Liveness, plus whether MCP is mounted |
-| `http://localhost:8000/mcp/sse` | MCP over SSE — the address an agent connects to |
+| `http://localhost:8000/mcp` | MCP over streamable HTTP — **preferred**, the default for modern clients |
+| `http://localhost:8000/mcp/sse` | MCP over SSE — for clients that only speak SSE |
 | `/search`, `/query`, `/ingest` | Plain HTTP, for anything that isn't an MCP client |
 
-Point a client at it:
+Point a client at it. Streamable HTTP needs nothing beyond the URL:
 
 ```json
 {
   "mcpServers": {
-    "srag": { "url": "http://localhost:8000/mcp/sse" }
+    "srag": { "url": "http://localhost:8000/mcp" }
   }
 }
 ```
+
+SSE clients have to say so — a bare `url` is read as streamable HTTP, so pointing
+one at `/mcp/sse` without `type` connects with the wrong transport and fails:
+
+```json
+{
+  "mcpServers": {
+    "srag": { "url": "http://localhost:8000/mcp/sse", "type": "sse" }
+  }
+}
+```
+
+The MCP surface is the search, retrieval, ingestion and session endpoints — eleven
+tools. `/health`, `/` and `/inspect` are excluded on purpose: they are for humans
+and uptime checks, and every tool you expose costs the agent prompt budget on
+every single turn.
+
+### Security
+
+The server binds **`127.0.0.1`** by default. It has no authentication unless you
+set one, and it reads local files on request, so loopback-only is the safe
+default — pass `--host 0.0.0.0` deliberately, and set a token when you do.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SRAG_API_TOKEN` | unset | Requires `Authorization: Bearer <token>` on every request except `/health` |
+| `SRAG_ALLOWED_ORIGINS` | local dev origins | CORS allowlist, comma separated. `*` restores the old wildcard — don't, unless the browser app is trusted |
+| `SRAG_INGEST_ROOTS` | unset (any path) | `os.pathsep`-separated directories `/ingest` may read from |
+
+With a token set, an MCP client passes it as a header:
+
+```json
+{
+  "mcpServers": {
+    "srag": {
+      "url": "http://localhost:8000/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+Why the allowlist matters: before 1.3.9 the server answered `allow_origins=["*"]`
+with no auth, so **any page a user visited** could POST `/ingest` with a path like
+`/home/user/notes.txt` and then POST `/query` to read it back. CORS does not
+affect MCP or other server-to-server clients — they send no `Origin` header — so
+locking it down costs them nothing.
 
 Two things worth knowing before you wire it up. **Run SRag as its own service, not
 inside the agent's process** — it holds a LanceDB index and an embedding model, and

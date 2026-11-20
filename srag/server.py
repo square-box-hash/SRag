@@ -1,25 +1,34 @@
 """
-srag/server.py — SRag FastAPI Server (v1.2.0)
+srag/server.py — SRag FastAPI Server (v1.3.9)
 
 Wraps the SRag library as a language-agnostic HTTP service.
 Any language that can make HTTP requests can now use SRag.
 
 Run:
-    uvicorn srag.server:app --host 0.0.0.0 --port 8000
-    # or via CLI (v1.2.0):
+    uvicorn srag.server:app --host 127.0.0.1 --port 8000
+    # or via CLI:
     srag serve --port 8000
+
+Binding note: this service has no authentication by default, so it binds
+127.0.0.1 (loopback only). Pass --host 0.0.0.0 deliberately to expose it on
+your network, and set SRAG_API_TOKEN when you do.
 """
 
 from __future__ import annotations
 
+import hmac
+import logging
+import os
 import time
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("srag.server")
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -31,16 +40,71 @@ app = FastAPI(
         "Smart RAG — local retrieval as an HTTP service. "
         "Replaces Tavily, Firecrawl, and Perplexity with a single open-source pipeline."
     ),
-    version="1.2.0",
+    version="1.3.9",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
+# ---------------------------------------------------------------------------
+# Security: CORS allowlist and optional bearer token
+# ---------------------------------------------------------------------------
+#
+# Why not allow_origins=["*"]: this server ingests local files and fetches URLs.
+# With a wildcard, any web page a user visits could POST /ingest with a path
+# like /home/user/notes.txt and then POST /query to read the contents back —
+# local file disclosure driven from a third-party origin, no auth required.
+#
+# CORS is irrelevant to MCP and other server-to-server clients (they send no
+# Origin header), so locking this down costs those callers nothing.
+
+
+def _cors_origins() -> list[str]:
+    """Explicit origins from SRAG_ALLOWED_ORIGINS, else local dev defaults."""
+    raw = os.environ.get("SRAG_ALLOWED_ORIGINS", "").strip()
+    if raw == "*":  # deliberate, documented opt-in
+        return ["*"]
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
+_API_TOKEN = os.environ.get("SRAG_API_TOKEN", "").strip()
+# /health stays open so liveness probes keep working with auth enabled.
+_OPEN_PATHS = {"/health"}
+
+
+@app.middleware("http")
+async def _require_bearer(request: Request, call_next):
+    """Enforce SRAG_API_TOKEN when it is set. No-op when it is unset."""
+    if not _API_TOKEN or request.url.path in _OPEN_PATHS:
+        return await call_next(request)
+
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(
+        value.strip().encode(), _API_TOKEN.encode()
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized. Send 'Authorization: Bearer <SRAG_API_TOKEN>'."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
+# Added last so it is the outermost middleware — a 401 from the check above
+# still carries CORS headers, and the browser shows the real error.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins(),
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ---------------------------------------------------------------------------
@@ -48,6 +112,39 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 _srag_instance = None
+
+
+def _fail(context: str, exc: Exception, status: int = 500) -> HTTPException:
+    """Log the real error, return a generic one.
+
+    Exception text can carry filesystem paths, connection strings with
+    credentials, and library internals. None of that belongs in an HTTP
+    response; it belongs in the server log.
+    """
+    logger.exception("%s failed", context)
+    return HTTPException(
+        status_code=status,
+        detail=f"{context} failed. See server logs for details.",
+    )
+
+
+def _ingest_path_allowed(path: str) -> bool:
+    """True when `path` is inside one of SRAG_INGEST_ROOTS (or no roots set)."""
+    raw = os.environ.get("SRAG_INGEST_ROOTS", "").strip()
+    if not raw:
+        return True
+    try:
+        target = os.path.realpath(path)
+    except (OSError, ValueError):
+        return False
+    for root in raw.split(os.pathsep):
+        root = root.strip()
+        if not root:
+            continue
+        real_root = os.path.realpath(root)
+        if target == real_root or target.startswith(real_root + os.sep):
+            return True
+    return False
 
 
 def get_srag():
@@ -212,23 +309,24 @@ def _build_prompt_string(question: str, chunks: list[dict]) -> str:
 @app.get("/health", tags=["System"])
 async def health():
     """Liveness check."""
-    return {"status": "ok", "version": "1.2.0", "service": "srag"}
+    return {"status": "ok", "version": "1.3.9", "service": "srag"}
 
 
 @app.get("/", tags=["System"])
 async def root():
     return {
         "service": "SRag API",
-        "version": "1.2.0",
+        "version": "1.3.9",
         "docs": "/docs",
         "mcp": {
             "available": _mcp_available,
+            "http_endpoint": "/mcp" if _mcp_available else None,
             "sse_endpoint": "/mcp/sse" if _mcp_available else None,
             "install": "pip install fastapi-mcp" if not _mcp_available else None,
         },
         "endpoints": {
-            "read"               "POST /read"
-            "inspect"            "GET  /inspect",
+            "read":              "POST /read",
+            "inspect":           "GET  /inspect",
             "search":            "POST /search",
             "parallel_search":   "POST /search/parallel",
             "sequential_search": "POST /search/sequential",
@@ -273,7 +371,7 @@ async def search(req: SearchRequest):
             "llm_context": _format_llm_context(result, req.query),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/search", e)
 
 
 @app.post("/search/parallel", tags=["Search"])
@@ -301,7 +399,7 @@ async def parallel_search(req: ParallelSearchRequest):
             ],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/search/parallel", e)
 
 
 @app.post("/search/sequential", tags=["Search"])
@@ -330,7 +428,7 @@ async def sequential_search(req: SequentialSearchRequest):
             ],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/search/sequential", e)
 
 
 @app.post("/search/verify", tags=["Search"])
@@ -353,7 +451,7 @@ async def verify_search(req: VerifyRequest):
             "llm_context": _format_llm_context(result, req.query),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/search/verify", e)
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +485,7 @@ async def query_session(req: QueryRequest):
             "prompt_ready": _build_prompt_string(req.question, formatted),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/query", e)
 
 
 @app.post("/context", tags=["Retrieval"])
@@ -414,7 +512,7 @@ async def build_context(req: ContextRequest):
         elif req.output_format == "mongodb":
             return {"format": "mongodb", "output": context.to_mongodb()}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/context", e)
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +533,20 @@ async def ingest(req: IngestRequest):
     Optional: pass 'table' or 'query' for database sources.
     """
     sr = get_srag()
+
+    # Optional confinement: with SRAG_INGEST_ROOTS set (os.pathsep separated),
+    # the endpoint refuses to read files outside those directories. Unset means
+    # unchanged behaviour, so existing users are not broken by the fix.
+    is_db_source = req.source.startswith(("sqlite://", "postgresql://", "postgres://"))
+    if not is_db_source and not _ingest_path_allowed(req.source):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Path is outside SRAG_INGEST_ROOTS. "
+                "Set SRAG_INGEST_ROOTS to the directories ingestion may read."
+            ),
+        )
+
     try:
         kwargs = {}
         if req.table:
@@ -453,7 +565,7 @@ async def ingest(req: IngestRequest):
             "timing_ms": elapsed,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/ingest", e)
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +580,7 @@ async def list_sessions():
         sessions = sr.list_sessions()
         return {"sessions": sessions, "count": len(sessions)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/sessions", e)
 
 
 @app.get("/sessions/{name}/stale", tags=["Sessions"], response_model=StaleCheckResponse)
@@ -482,7 +594,7 @@ async def check_stale(
         stale = sr.is_stale(name, max_age_hours=max_age_hours)
         return StaleCheckResponse(session=name, is_stale=stale, max_age_hours=max_age_hours)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/sessions/{name}/stale", e)
 
 
 @app.delete("/sessions/{name}", tags=["Sessions"])
@@ -492,17 +604,18 @@ async def delete_session(name: str):
     """
     sr = get_srag()
     try:
-        # force_new on a dummy search clears the session
-        # expose direct delete if SRag adds sr.delete_session() in future
-        return {
-            "session": name,
-            "message": (
-                f"To wipe session '{name}', run POST /search with "
-                f'"session": "{name}", "force_new": true'
-            ),
-        }
+        deleted = sr.delete_session(name)
+    except AttributeError:
+        raise HTTPException(
+            status_code=501,
+            detail="This SRag build has no delete_session(); upgrade to >= 1.3.9.",
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/sessions/{name}", e)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No indexed session named '{name}'.")
+    return {"session": name, "deleted": True}
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +640,7 @@ async def inspect(
         data = srag_inspect(db=db, show=show, session=session, domain=domain, topic=topic)
         return data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/inspect", e)
 
 
 # ---------------------------------------------------------------------------
@@ -582,9 +695,9 @@ async def read_url(req: ReadRequest):
             "noise_removed":  distilled["removed"],
         }
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+        raise _fail("/read", e, status=e.response.status_code)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fail("/read", e)
 
 # ---------------------------------------------------------------------------
 # Config helper
@@ -609,7 +722,7 @@ def _apply_config(sr: Any, preset: str) -> None:
 # CLI entrypoint (used by `srag serve`)
 # ---------------------------------------------------------------------------
 
-def serve(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
+def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
     """Start the SRag HTTP server. Called by `srag serve` CLI command."""
     uvicorn.run(
         "srag.server:app",
@@ -625,18 +738,33 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------------------------
-# MCP Server — mounts at /mcp/sse
-# Exposes all SRag FastAPI endpoints as MCP tools automatically.
-# Connect any MCP client (Claude Desktop, Cursor, Anu) to:
-#   http://localhost:8000/mcp/sse
+# MCP Server — mounts at /mcp (streamable HTTP) and /mcp/sse (SSE)
+# Exposes the search, retrieval, ingestion and session endpoints as MCP tools.
+# Connect any MCP client (Anu, Claude Desktop, Cursor) to:
+#   http://localhost:8000/mcp        <- streamable HTTP, preferred
+#   http://localhost:8000/mcp/sse    <- SSE only clients
 #
-# Claude Desktop config:
-#   { "mcpServers": { "srag": { "url": "http://localhost:8000/mcp/sse" } } }
+# Anu / modern clients:
+#   { "mcpServers": { "srag": { "url": "http://localhost:8000/mcp" } } }
+# SSE clients must declare the transport:
+#   { "mcpServers": { "srag": { "url": "http://localhost:8000/mcp/sse", "type": "sse" } } }
 # ---------------------------------------------------------------------------
 
-def _mount_mcp():
+def _mount_mcp() -> bool:
+    """Mount the MCP server on both transports.
+
+    /mcp      — streamable HTTP (what modern clients, including Anu, default to)
+    /mcp/sse  — SSE (kept for Claude Desktop / Cursor configs already in the wild)
+
+    Never raises: a broken or older fastapi-mcp must not stop the HTTP API from
+    booting. Only a missing package is quiet; anything else is logged.
+    """
     try:
         from fastapi_mcp import FastApiMCP
+    except ImportError:
+        return False
+
+    try:
         mcp = FastApiMCP(
             app,
             name="SRag",
@@ -645,10 +773,30 @@ def _mount_mcp():
                 "Search the web, query indexed sessions, ingest files and databases. "
                 "No API keys required, runs fully local."
             ),
+            # /health, / and /inspect are for humans and uptime checks. Exposing
+            # them as tools spends the agent's prompt budget on every turn.
+            exclude_tags=["System"],
         )
-        mcp.mount()  # mounts at /mcp → /mcp/sse for SSE connections
-        return True
-    except ImportError:
+        mounted = False
+        if hasattr(mcp, "mount_http"):
+            mcp.mount_http(mount_path="/mcp")
+            mounted = True
+        if hasattr(mcp, "mount_sse"):
+            mcp.mount_sse(mount_path="/mcp/sse")
+            mounted = True
+        if not mounted:
+            # fastapi-mcp < 0.4 only has the deprecated SSE-only mount()
+            mcp.mount(mount_path="/mcp")
+            mounted = True
+        return mounted
+    except Exception as exc:  # noqa: BLE001 — must not take the API down
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "MCP mount failed (%s: %s); HTTP API is still available.",
+            type(exc).__name__,
+            exc,
+        )
         return False
 
 _mcp_available = _mount_mcp()
