@@ -1,22 +1,23 @@
-"""Exercise the indexer foundation without torch or network access."""
+"""Exercise the indexer foundation without torch or network access.
 
-import shutil
+Converted from a print-and-exit script: it called `sys.exit()` at import time,
+which crashed pytest collection with an INTERNALERROR instead of reporting a
+test result. It also hardcoded the author's absolute path and registered a fake
+`srag` module in sys.modules, which broke the other test modules.
+"""
+
+import os
 import sys
 
+import lancedb
 import numpy as np
 import pyarrow as pa
-import lancedb
+import pytest
 
-sys.path.insert(0, "/scratch/work/srag")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Register a package stub so importing submodules does not pull in torch via __init__.
-import types
-_pkg = types.ModuleType("srag")
-_pkg.__path__ = ["/scratch/work/srag/srag"]
-sys.modules["srag"] = _pkg
-
-from srag.embeddings import EmbeddingMismatchError, EmbeddingSpec
-from srag.indexer import SRagIndexer
+from srag.embeddings import EmbeddingMismatchError, EmbeddingSpec  # noqa: E402
+from srag.indexer import SRagIndexer  # noqa: E402
 
 
 class StubEmbedder:
@@ -46,70 +47,70 @@ DOCS = [
     {"url": "https://c.example", "title": "Weak", "content": "low coherence noise", "coherence_score": 0.1},
 ]
 
-DB = "/tmp/srag_foundation_test"
-shutil.rmtree(DB, ignore_errors=True)
 
-failures = []
+def test_index_search_and_namespacing(tmp_path):
+    db = str(tmp_path / "foundation")
+
+    # 1. index with a 384-dimension embedder
+    small = SRagIndexer(db_path=db, embedder=StubEmbedder(384, "stub-384"))
+    stats = small.index_documents(DOCS, table_name="web_chunks")
+    assert stats["total_indexed"] == 2, "only coherent chunks kept"
+    assert stats["physical_table"].endswith("__384"), "physical table is namespaced"
+    assert stats["embedding"]["dimension"] == 384, "spec travels with the write"
+
+    # 2. search and session listing
+    hits = small.semantic_search("alpha beta", "web_chunks", k=2)
+    assert len(hits) == 2, "search returns rows"
+    assert all("content" in h for h in hits), "rows carry content"
+    assert small.list_sessions() == ["web_chunks"], "logical session name only"
+    assert small.describe("web_chunks")["dimension"] == 384, "describe reports the model"
+
+    # 3. switch to a 768-dimension embedder, same session
+    big = SRagIndexer(db_path=db, embedder=StubEmbedder(768, "stub-768"))
+    stats2 = big.index_documents(DOCS, table_name="web_chunks")
+    assert stats2["physical_table"].endswith("__768"), "new sibling table, not a rewrite"
+    assert sorted(big.list_sessions()) == ["web_chunks"], "sessions still collapse to one name"
+    assert small.describe("web_chunks")["dimension"] == 384, "old index untouched"
+    assert len(big.semantic_search("alpha", "web_chunks", k=2)) == 2, "new embedder searches its own table"
 
 
-def check(label, condition, detail=""):
-    print(("  ok   " if condition else "  FAIL ") + label + (f"  [{detail}]" if detail else ""))
-    if not condition:
-        failures.append(label)
+def test_legacy_table_dimension_mismatch_is_refused(tmp_path):
+    legacy_db = str(tmp_path / "legacy")
+    db = lancedb.connect(legacy_db)
+    legacy_schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("title", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("url", pa.string()),
+            pa.field("timestamp", pa.string()),
+            pa.field("author", pa.string()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("coherence_score", pa.float32()),
+            pa.field("embedding", pa.list_(pa.float32(), 384)),
+        ]
+    )
+    db.create_table("old_session", schema=legacy_schema, mode="overwrite")
+
+    # A 768-dimension embedder must refuse the 384-dimension legacy table.
+    mismatched = SRagIndexer(db_path=legacy_db, embedder=StubEmbedder(768, "stub-768"))
+    with pytest.raises(EmbeddingMismatchError):
+        mismatched.semantic_search("anything", "old_session", k=1)
+
+    # A matching one still works.
+    matching = SRagIndexer(db_path=legacy_db, embedder=StubEmbedder(384, "stub-384"))
+    assert matching.semantic_search("anything", "old_session", k=1) == []
 
 
-print("1. index with a 384-dimension embedder")
-small = SRagIndexer(db_path=DB, embedder=StubEmbedder(384, "stub-384"))
-stats = small.index_documents(DOCS, table_name="web_chunks")
-check("only coherent chunks kept", stats["total_indexed"] == 2, str(stats["total_indexed"]))
-check("physical table is namespaced", stats["physical_table"].endswith("__384"), stats["physical_table"])
-check("spec travels with the write", stats["embedding"]["dimension"] == 384)
+def test_delete_session(tmp_path):
+    """delete_session() is new in 1.3.9 — the HTTP endpoint used to fake success."""
+    db = str(tmp_path / "delete")
+    indexer = SRagIndexer(db_path=db, embedder=StubEmbedder(384, "stub-384"))
+    indexer.index_documents(DOCS, table_name="web_chunks")
+    assert indexer.list_sessions() == ["web_chunks"]
 
-print("2. search and session listing")
-hits = small.semantic_search("alpha beta", "web_chunks", k=2)
-check("search returns rows", len(hits) == 2, str(len(hits)))
-check("rows carry content", all("content" in h for h in hits))
-check("logical session name only", small.list_sessions() == ["web_chunks"], str(small.list_sessions()))
-check("describe reports the model", small.describe("web_chunks")["dimension"] == 384)
+    assert indexer.delete_session("web_chunks") is True
+    assert indexer.list_sessions() == [], "session is gone"
+    assert indexer.describe("web_chunks") is None, "metadata entry is gone"
 
-print("3. switch to a 768-dimension embedder, same session")
-big = SRagIndexer(db_path=DB, embedder=StubEmbedder(768, "stub-768"))
-stats2 = big.index_documents(DOCS, table_name="web_chunks")
-check("new sibling table, not a rewrite", stats2["physical_table"].endswith("__768"), stats2["physical_table"])
-check("sessions still collapse to one name", sorted(big.list_sessions()) == ["web_chunks"], str(big.list_sessions()))
-check("old index untouched", small.describe("web_chunks")["dimension"] == 384)
-check("new embedder searches its own table", len(big.semantic_search("alpha", "web_chunks", k=2)) == 2)
-
-print("4. legacy table with a mismatched dimension is refused, not corrupted")
-legacy_db = "/tmp/srag_legacy_test"
-shutil.rmtree(legacy_db, ignore_errors=True)
-db = lancedb.connect(legacy_db)
-legacy_schema = pa.schema(
-    [
-        pa.field("id", pa.string()),
-        pa.field("title", pa.string()),
-        pa.field("content", pa.string()),
-        pa.field("url", pa.string()),
-        pa.field("timestamp", pa.string()),
-        pa.field("author", pa.string()),
-        pa.field("chunk_index", pa.int32()),
-        pa.field("coherence_score", pa.float32()),
-        pa.field("embedding", pa.list_(pa.float32(), 384)),
-    ]
-)
-db.create_table("old_session", schema=legacy_schema, mode="overwrite")
-
-mismatched = SRagIndexer(db_path=legacy_db, embedder=StubEmbedder(768, "stub-768"))
-try:
-    mismatched.semantic_search("anything", "old_session", k=1)
-    check("legacy mismatch raises", False, "no error raised")
-except EmbeddingMismatchError as exc:
-    check("legacy mismatch raises", True, str(exc)[:60] + "…")
-
-print("5. legacy table with a matching dimension still works")
-matching = SRagIndexer(db_path=legacy_db, embedder=StubEmbedder(384, "stub-384"))
-check("matching legacy table resolves", matching.semantic_search("anything", "old_session", k=1) == [])
-
-print()
-print("FAILURES:", failures if failures else "none")
-sys.exit(1 if failures else 0)
+    assert indexer.delete_session("web_chunks") is False, "second delete reports nothing to do"

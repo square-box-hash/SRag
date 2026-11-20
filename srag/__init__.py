@@ -273,6 +273,10 @@ class SRag:
 
     # ── Cache management ──────────────────────────────────────────────────────
 
+    def delete_session(self, session: str) -> bool:
+        """Wipe a session's index. Returns True if something was deleted."""
+        return self._orchestrator.indexer.delete_session(session)
+
     def is_stale(self, session: str, max_age_hours: int = 24) -> bool:
         return self._orchestrator.is_stale(session, max_age_hours)
 

@@ -3,6 +3,66 @@
 All notable changes to SRag are documented here.
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.9] — 2026-11-20
+
+### Fixed
+- **`srag/server.py` did not parse, so the HTTP and MCP server could not start.**
+  Two entries in the `endpoints` map inside `root()` had lost their colons
+  (`"read" "POST /read"`), which Python reads as implicit string concatenation
+  and then rejects with `SyntaxError: invalid syntax` at import. Both `srag serve`
+  and `uvicorn srag.server:app` died before binding a port. The 1.3.8 wheel on
+  PyPI contained the same bytes, so this affected every install, not just `main`.
+- **`srag[mcp]` produced a server with no MCP endpoint.** `fastapi-mcp` 0.4.x
+  calls `mcp.Server(name, version)` positionally, and the `mcp` 2.x SDK changed
+  that signature, so the mount raised `TypeError`. `_mount_mcp()` caught only
+  `ImportError`, so the exception escaped module import and took the whole app
+  down. The extra now pins `mcp>=1.10,<2`, and any mount failure is logged and
+  degraded instead of fatal — the HTTP API stays up and `/` reports
+  `mcp.available: false` with the reason.
+- `_mount_mcp()` used `mcp.mount()`, deprecated in `fastapi-mcp` 0.4. It now
+  mounts `/mcp` (streamable HTTP) and `/mcp/sse` (SSE), falling back to the
+  legacy call for older `fastapi-mcp`.
+- **`DELETE /sessions/{name}` returned 200 and deleted nothing** — it returned a
+  message telling you to POST `/search` with `force_new` instead. It now deletes
+  through the new `SRag.delete_session()` / `SRagIndexer.delete_session()`, which
+  drops the namespaced table and its `index_meta.json` entry, answers 404 for an
+  unknown session and 501 on a build without the method.
+- **Error responses echoed exception text.** All 13 `detail=str(e)` sites now log
+  the real error and return a generic message, because exception text carries
+  filesystem paths and connection strings with credentials.
+- `tests/test_indexer_embedding_namespaces.py` hardcoded an absolute path and
+  registered a fake `srag` module in `sys.modules`, which broke every other test
+  module's import; it also called `sys.exit()` at import time, so pytest died
+  with an INTERNALERROR instead of running it. It is now three pytest tests
+  (16 → 30 in the suite) that use `tmp_path` and assert instead of printing.
+
+### Security
+- **Local file disclosure via wildcard CORS.** The server ran with
+  `allow_origins=["*"]`, no authentication and a `0.0.0.0` bind. Any web page a
+  user visited could `POST /ingest` with a path such as `/home/user/notes.txt`
+  and then `POST /query` to read the chunks back — no auth, no user interaction
+  beyond loading the page. The same origin could drive `/read` at internal hosts
+  and `/search` against the user's machine.
+- **`srag serve` now binds `127.0.0.1`** (was `0.0.0.0`). Pass `--host 0.0.0.0`
+  deliberately to expose it on a network. *Breaking for anyone relying on the old
+  default.*
+- **CORS is an allowlist.** Default is local dev origins; cross-origin browser
+  clients must be named in `SRAG_ALLOWED_ORIGINS`. Setting it to `*` restores the
+  old behaviour explicitly. *Breaking for browser clients on other origins.*
+- `SRAG_API_TOKEN` enables bearer authentication (`/health` stays open for
+  liveness probes). Unset means no auth, as before.
+- `SRAG_INGEST_ROOTS` confines `/ingest` to listed directories. Unset means
+  unchanged behaviour.
+
+### Added
+- `tests/test_server_security.py` — 14 tests covering the CORS allowlist, the
+  bearer token, the ingest roots guard, error-detail redaction and session
+  deletion, including that a 401 still carries CORS headers.
+- `/` now reports both `http_endpoint` and `sse_endpoint`, and the MCP tool
+  surface excludes `System`-tagged routes: `/health`, `/` and `/inspect` are for
+  humans and uptime checks, and every tool costs an agent prompt budget on every
+  turn. 14 tools → 11.
+
 ## [1.3.8] — 2026-11-18
 
 ### Fixed

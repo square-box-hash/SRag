@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srag"
-version = "1.3.8"
+version = "1.3.9"
 description = "Smart RAG — the retrieval layer for local AI agents. Replaces Tavily + Firecrawl + Perplexity with a single open-source package."
 readme = "README.md"
 license = "MIT"
@@ -47,7 +47,11 @@ local = [
 ]
 mcp = [
     "srag[server]",
-    "fastapi-mcp>=0.3.0",
+    "fastapi-mcp>=0.4.0",
+    # fastapi-mcp 0.4.x calls mcp.Server(name, version) positionally; the mcp 2.x
+    # SDK changed that signature, so the mount dies with a TypeError and the
+    # server silently comes up with no MCP endpoint at all.
+    "mcp>=1.10,<2",
 ]
 docs = [
     "pymupdf>=1.24",
