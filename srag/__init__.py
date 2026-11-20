@@ -57,7 +57,7 @@ from srag.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.8"
+__version__ = "1.3.10"
 __all__ = [
     "SRag",
     "SRagConfig",

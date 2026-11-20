@@ -24,11 +24,11 @@ WORKDIR /app
 # image serves HTTP only and an agent has no /mcp endpoint to connect to.
 # Pinned: a rebuild must not silently pick up a different release.
 # In local dev, replace with: COPY . . && pip install -e ".[all]"
-RUN pip install --no-cache-dir "srag[all,mcp]==1.3.9" uvicorn fastapi
+RUN pip install --no-cache-dir "srag[all,mcp]==1.3.10" uvicorn fastapi
 
 # Lean alternative for a small container (no torch, ~200 MB instead of ~2 GB).
 # Requires hosted embeddings: EMBEDDING_PROVIDER=google and GOOGLE_API_KEY.
-#   RUN pip install --no-cache-dir "srag[server,mcp,docs]==1.3.9" uvicorn fastapi
+#   RUN pip install --no-cache-dir "srag[server,mcp,docs]==1.3.10" uvicorn fastapi
 
 # Pre-download sentence-transformers model so it's cached in the image
 # This means the container doesn't need internet on first run
