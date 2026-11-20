@@ -65,7 +65,9 @@ server = [
     "uvicorn[standard]>=0.29.0"
 ]
 all = [
-    "srag[docs,databases,server,local]"
+    # mcp belongs here: without it a container built from `srag[all]` serves
+    # HTTP only and has no /mcp endpoint for an agent to connect to.
+    "srag[docs,databases,server,local,mcp]"
 ]
 
 [project.urls]

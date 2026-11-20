@@ -6,7 +6,7 @@
 #   docker run -p 8000:8000 srag
 #
 # With volume for persistent LanceDB + intelligence data:
-#   docker run -p 8000:8000 -v $(pwd)/srag_data:/app/srag_data srag
+#   docker run -p 8000:8000 -v $(pwd)/srag_data:/app/srag_db srag
 
 FROM python:3.11-slim
 
@@ -20,9 +20,15 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install SRag with all optional deps
+# Install SRag with all optional deps, including the MCP extra — without it the
+# image serves HTTP only and an agent has no /mcp endpoint to connect to.
+# Pinned: a rebuild must not silently pick up a different release.
 # In local dev, replace with: COPY . . && pip install -e ".[all]"
-RUN pip install --no-cache-dir "srag[all]" uvicorn fastapi
+RUN pip install --no-cache-dir "srag[all,mcp]==1.3.9" uvicorn fastapi
+
+# Lean alternative for a small container (no torch, ~200 MB instead of ~2 GB).
+# Requires hosted embeddings: EMBEDDING_PROVIDER=google and GOOGLE_API_KEY.
+#   RUN pip install --no-cache-dir "srag[server,mcp,docs]==1.3.9" uvicorn fastapi
 
 # Pre-download sentence-transformers model so it's cached in the image
 # This means the container doesn't need internet on first run
@@ -35,9 +41,10 @@ print('Model cached.')"
 RUN playwright install chromium --with-deps || true
 
 # Persistent data directory — mount this as a volume to keep
-# LanceDB sessions, ReputationStore, LexiconStore across restarts
-RUN mkdir -p /app/srag_data
-ENV SRAG_DATA_DIR=/app/srag_data
+# LanceDB sessions, ReputationStore, LexiconStore across restarts.
+# It is the default db_path (./srag_db) resolved against /app; SRAG_DB_PATH
+# overrides it, and SRAG_DATA_DIR does too from 1.3.10 onwards.
+RUN mkdir -p /app/srag_db
 
 # HuggingFace token — pass at runtime via -e HF_TOKEN=xxx
 # or bake into a .env file mounted at /app/.env

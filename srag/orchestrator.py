@@ -61,18 +61,21 @@ class SRagOrchestrator:
         max_chars:     int   = 2000,
         extract_mode:  str   = "trafilatura",
         max_concurrent: int  = 5,
-        db_path:       str   = "./srag_db",
+        db_path:       Optional[str] = None,
         rerank_top_k:  int   = 5,
     ):
-        
-        cfg = config or SRagConfig(
+        # db_path=None means "use the config default", which is resolved from
+        # SRAG_DATA_DIR / SRAG_DB_PATH. Passing a literal here would beat it.
+        cfg_kwargs = dict(
             max_results    = max_results,
             max_chars      = max_chars,
             extract_mode   = extract_mode,
             max_concurrent = max_concurrent,
-            db_path        = db_path,
             rerank_top_k   = rerank_top_k,
         )
+        if db_path is not None:
+            cfg_kwargs["db_path"] = db_path
+        cfg = config or SRagConfig(**cfg_kwargs)
         self.config = cfg
         
         # ── Shared model instance ─────────────────────────────────────────────

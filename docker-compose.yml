@@ -1,23 +1,45 @@
 services:
   srag:
     build: .
-    image: srag:latest
+    image: srag:1.3.9
     container_name: srag
+    # Loopback only. A tunnel connects to the port on this machine; nothing else
+    # needs to reach it, and publishing it on the LAN invites the wildcard-CORS
+    # problem fixed in 1.3.9.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       # HuggingFace token for model downloads (free at huggingface.co)
       - HF_TOKEN=${HF_TOKEN:-}
+      # Required as soon as this is reachable from outside: a tunnel URL is
+      # public and its hostname is published to certificate transparency logs.
+      - SRAG_API_TOKEN=${SRAG_API_TOKEN:-}
+      # Confine /ingest to real document directories, not the whole filesystem.
+      - SRAG_INGEST_ROOTS=${SRAG_INGEST_ROOTS:-}
+      - SRAG_ALLOWED_ORIGINS=${SRAG_ALLOWED_ORIGINS:-}
+      # Hosted embeddings keep torch out of the container; "local" needs ~800 MB.
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
     volumes:
-      # Persist LanceDB sessions, ReputationStore, LexiconStore across restarts
-      - srag_data:/app/srag_data
+      # Persist LanceDB sessions, ReputationStore, LexiconStore across restarts.
+      # Mounted at the default db_path (./srag_db inside /app) so this works on
+      # the published release as well as later ones; set SRAG_DB_PATH to relocate.
+      - srag_data:/app/srag_db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # /sessions, not /health: it builds the SRag instance, so the container is
+      # only "healthy" once the indexer and embedding model are loaded. On /health
+      # the first real query paid that cost instead.
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$SRAG_API_TOKEN" ];
+          then curl -fsS -H "Authorization: Bearer $$SRAG_API_TOKEN" http://localhost:8000/sessions;
+          else curl -fsS http://localhost:8000/sessions; fi
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s
 
   # Optional: self-hosted SearXNG instance
   # SRag will auto-detect and use this as primary search if running
@@ -25,7 +47,7 @@ services:
     image: searxng/searxng:latest
     container_name: searxng
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - searxng_data:/etc/searxng
     environment:
