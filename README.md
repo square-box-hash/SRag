@@ -272,6 +272,13 @@ opentunnel route add 8000
 # → https://<random>.opentunnel.xyz
 ```
 
+**A tunnel is reachability, not hosting.** The public URL forwards to a bridge
+that runs on the machine you started it from, and TLS terminates there — so the
+machine has to stay on. Switch it off and the URL is dead. For a search backend
+that is available the moment an agent asks, run this container on a host that
+stays up: a VPS with the `srag_data` volume, or any platform that gives you a
+persistent disk. A laptop is not one.
+
 **The URL is not authentication.** Tunnel hostnames are public and published to
 certificate transparency logs, so anyone who learns it can reach your server.
 With `SRAG_API_TOKEN` set, everything except `/health` needs the bearer header;
