@@ -600,7 +600,10 @@ async def check_stale(
 @app.delete("/sessions/{name}", tags=["Sessions"])
 async def delete_session(name: str):
     """
-    Force-wipe a session. Next search with force_new=True will rebuild it.
+    Delete a session's index and its metadata entry.
+
+    Answers 404 when no session of that name is indexed. The next search with
+    the same session name rebuilds it from scratch.
     """
     sr = get_srag()
     try:
