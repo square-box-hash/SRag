@@ -1,4 +1,22 @@
+import os
 from dataclasses import dataclass, field
+
+def _default_db_path() -> str:
+    """Where LanceDB sessions live.
+
+    SRAG_DB_PATH wins; otherwise SRAG_DATA_DIR/srag_db; otherwise ./srag_db.
+    The Docker image sets SRAG_DATA_DIR to the mounted volume — without this the
+    index landed in the container's ephemeral layer and every restart re-searched
+    from scratch.
+    """
+    explicit = os.environ.get("SRAG_DB_PATH", "").strip()
+    if explicit:
+        return explicit
+    data_dir = os.environ.get("SRAG_DATA_DIR", "").strip()
+    if data_dir:
+        return os.path.join(data_dir, "srag_db")
+    return "./srag_db"
+
 
 @dataclass
 class SRagConfig:
@@ -31,7 +49,7 @@ class SRagConfig:
     # they are indexed by default rather than silently dropped.
     ingest_min_coherence: float = 0.0
     dedupe_threshold:  float = 0.85
-    db_path:           str   = "./srag_db"
+    db_path:           str   = field(default_factory=_default_db_path)
 
     # ── Embedding settings ───────────────────────────────────
     embedding_provider:  str = "local"   # "local" (no key, offline) | "google"

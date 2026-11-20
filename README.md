@@ -245,6 +245,56 @@ with no auth, so **any page a user visited** could POST `/ingest` with a path li
 affect MCP or other server-to-server clients — they send no `Origin` header — so
 locking it down costs them nothing.
 
+### Container, and a public URL for an agent
+
+A container is the easiest way to keep SRag always-on and reachable from a hosted
+agent such as Anu. The compose file ships ready:
+
+```bash
+cp .env.example .env
+# set SRAG_API_TOKEN to something long and random, and SRAG_INGEST_ROOTS to the
+# directories you actually want /ingest to read
+docker compose up -d --build
+curl -s -H "Authorization: Bearer $SRAG_API_TOKEN" localhost:8000/sessions
+```
+
+The container listens on `127.0.0.1` only, keeps its index in the `srag_data`
+volume (`/app/srag_db`), and is only reported healthy once the indexer and embedding model are
+loaded (`/sessions`, not `/health`) — so an agent that connects the moment the
+container is up does not pay the model load on its first search.
+
+To reach it from a hosted agent, put a tunnel in front. OpenTunnel is a good fit
+because TLS terminates on your machine, so the relay forwards ciphertext and
+never sees your token:
+
+```bash
+opentunnel route add 8000
+# → https://<random>.opentunnel.xyz
+```
+
+**The URL is not authentication.** Tunnel hostnames are public and published to
+certificate transparency logs, so anyone who learns it can reach your server.
+With `SRAG_API_TOKEN` set, everything except `/health` needs the bearer header;
+`SRAG_INGEST_ROOTS` is what stops a stranger using `/ingest` to read your files.
+
+Point Anu at the streamable HTTP endpoint:
+
+```json
+{
+  "mcpServers": {
+    "srag": {
+      "url": "https://<random>.opentunnel.xyz/mcp",
+      "headers": { "Authorization": "Bearer YOUR_SRAG_API_TOKEN" }
+    }
+  }
+}
+```
+
+Two operational notes. A tunnel dies with your machine, so "always available"
+really means "the host stays up" — a laptop that sleeps is not a search backend.
+And if the tunnel drops and reconnects under a new hostname, update the connector:
+the MCP client keeps its connection until the page reloads.
+
 Two things worth knowing before you wire it up. **Run SRag as its own service, not
 inside the agent's process** — it holds a LanceDB index and an embedding model, and
 a chat app should not carry either. And **the free hosting tier that sleeps after an

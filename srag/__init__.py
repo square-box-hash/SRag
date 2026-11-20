@@ -91,7 +91,7 @@ class SRag:
     def __init__(
         self,
         config:         SRagConfig = None,
-        db_path:        str        = "./srag_db",
+        db_path:        str        = None,
         max_results:    int        = 12,
         max_chars:      int        = 2000,
         extract_mode:   str        = "trafilatura",
